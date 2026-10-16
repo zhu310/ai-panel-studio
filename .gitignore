@@ -16,6 +16,7 @@ htmlcov/
 node_modules/
 dist/
 coverage/
+*.tsbuildinfo
 
 # Runtime data and local logs
 *.db
