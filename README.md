@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-项目处于**阶段 0：需求工程、架构设计与开发规划**。当前仓库只含规划文档与 Git 忽略规则；未安装依赖、未创建前后端代码、未调用模型 API，也没有可运行服务。
+项目处于**阶段 1：数据模型、基础 API 与测试**。已实现后端基础 API、SQLite Schema 和预设样例；未实现前端、LLM、讨论调度或 SSE。
 
 ## 文档入口
 
@@ -14,4 +14,4 @@
 - [验收矩阵](docs/ACCEPTANCE.md)
 - [阶段 0 提示词记录](docs/prompts/00-kickoff.md)
 
-下一步须在审阅并明确授权后进入阶段 1；建议的最小任务是先固化 SQLite Schema 与迁移/初始化策略。
+运行：`python -m pip install -r requirements.txt`，随后 `python -m backend.app.init_db`、`python -m backend.app.seed`，并以 `python -m uvicorn backend.app.main:app --reload` 启动。OpenAPI 位于 `/docs`。
