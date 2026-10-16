@@ -17,7 +17,11 @@ def test_validation_and_missing():
  assert client.get("/api/v1/discussions/999").status_code==404
 def test_seed_idempotent():
  seed();seed(); rows=client.get("/api/v1/discussions").json();assert len(rows)==5
- assert all(len(client.get("/api/v1/discussions/"+str(x["id"])+"/participants").json())==5 for x in rows)
+ rosters=[client.get("/api/v1/discussions/"+str(x["id"])+"/participants").json() for x in rows]
+ assert all(len(roster)==5 for roster in rosters)
+ assert all(len({person["name"] for person in roster})==5 for roster in rosters)
+ assert all(len({person["stance"] for person in roster if person["role"]=="expert"})==4 for roster in rosters)
+ assert all(all(person["background"]!="跨领域实践背景" for person in roster) for roster in rosters)
 def test_isolation_order_and_foreign_key():
  with SessionLocal() as db:
   a=Discussion(topic="A",expert_count=2);b=Discussion(topic="B",expert_count=2);db.add_all([a,b]);db.flush()
