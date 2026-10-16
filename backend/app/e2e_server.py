@@ -33,22 +33,25 @@ class BrowserFakeLLM:
             ids = [int(x) for x in re.findall(r"^(\d+) .+（", user, re.MULTILINE)]
             progress = re.search(r"已公开发言：(\d+)/(\d+)", user)
             uttered, budget = map(int, progress.groups())
-            # Expert 2 responds twice; sequence is not a fixed round robin.
-            index = [0, 2, 1, 2, 3, 4][min(uttered, 5)]
+            # Expert 2 responds twice, every expert participates, and the host re-enters.
+            order = [0, 2, 1, 2, 3, 0, 4, 1, 3, 2, 0, 4, 2, 1, 3, 4, 2]
+            index = order[min(uttered, len(order) - 1)]
             if index >= len(ids):
                 index = 1
             await asyncio.sleep(0.15)
-            lines = [
-                ("open", f"围绕{topic}，请先谈可验证的收益和风险。"),
-                ("answer", "我同意先试点，但必须公开评估学习效果。"),
-                ("rebut", "仅有学习效果还不够，数据边界必须先确定。"),
-                ("add", "回应隐私担忧，我建议试点时使用最少必要数据。"),
-                ("question", "课堂实践还需要保留教师干预空间。"),
-                ("add", "学生也应有知情和退出的选择。"),
-            ]
-            action, text = lines[min(uttered, 5)]
+            if uttered == 0:
+                action, text = "open", f"围绕{topic}，请先谈可验证的收益和风险。"
+            elif index == 0:
+                action, text = "moderate", f"第{uttered + 1}轮请回应刚才的分歧，并说明可核验条件。"
+            else:
+                actions = ["answer", "rebut", "add", "question", "interrupt"]
+                action = actions[uttered % len(actions)]
+                text = f"第{uttered + 1}轮回应前一观点：应同时核验学习效果、数据边界与退出机制。"
+            full_budget = "完整预算" in topic
+            earliest_finish = 3 if len(ids) == 3 else 6
             return Turn(speaker_id=ids[index], action=action, text=text, focus="核验收益与风险",
-                        hand_raised=uttered == 2, finish=uttered >= min(budget - 2, 3 if len(ids) == 3 else 5))
+                        hand_raised=action == "interrupt" or uttered == 2,
+                        finish=False if full_budget else uttered >= min(budget - 2, earliest_finish))
         if schema is InsightBatch:
             return InsightBatch(items=[
                 InsightCandidate(kind="consensus", content="各方支持先试点并评估学习效果", evidence_sequences=[2, 4]),

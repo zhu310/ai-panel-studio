@@ -187,11 +187,15 @@ export default function RealApp({ onDemo }: { onDemo: () => void }) {
           : <p className="empty">等待生成嘉宾阵容。{busy ? "正在请求模型…" : "生成失败时可重试。"}</p>}
         {current?.status === "draft" ? <button className="primary" disabled={busy} onClick={() => void generateRoster(current.id)}>生成真实嘉宾阵容</button>
           : <button className="primary" disabled={busy || !people.length} onClick={() => void confirm()}>确认阵容，进入演播厅</button>}</section>
-      : <section className="grid"><aside className="participants"><h3>圆桌成员</h3>{people.map(p => {
-        const state = statuses[p.id]; return <article className={state?.status === "speaking" ? "speaking" : ""} style={{ "--c": p.color } as CSSProperties} key={p.id}>
-          <i/><b>{p.name}{p.role === "host" ? " · 主持" : ""}</b><small>{p.title}</small>
-          <span>{state?.status === "speaking" ? "发言中" : state?.status === "preparing" ? "准备发言" : state?.status === "hand_raised" ? "申请发言" : "待机"}</span>
-          {state?.focus && <small>{state.focus}</small>}</article>; })}</aside>
+      : <section className="grid"><aside className="participants"><h3>嘉宾状态</h3>{people.map(p => {
+        const state = statuses[p.id];
+        const status = state?.status ?? "idle";
+        const label = status === "speaking" ? "发言中" : status === "preparing" ? "准备发言" : status === "hand_raised" ? "申请发言" : "待机";
+        return <article className={`participant-card ${p.role} ${status}`} data-status={status} style={{ "--c": p.color } as CSSProperties} key={p.id}>
+          <div className="participant-head"><i/><div><b>{p.name}</b><small>{p.title}</small></div><em>{p.role === "host" ? "主持人" : "专家"}</em></div>
+          <span className="participant-state">{label}{state?.action ? ` · ${actionText[state.action] ?? state.action}` : ""}</span>
+          <p className="participant-focus"><b>公开关注点</b>{state?.focus ?? p.stance}</p>
+        </article>; })}</aside>
         <section className="transcript" ref={transcriptRef}><div className="controls"><b>实时 Transcript</b>
           {current?.status === "confirmed" && <button disabled={busy} onClick={() => void start()}>开始真实讨论</button>}
           {current?.status === "running" && <button disabled={busy} onClick={() => void stop()}>停止讨论</button>}</div>

@@ -79,11 +79,11 @@ it("updates messages, participant state, and insights only from backend events",
   stream.emit("participant.hand_raised", 1, { participant_id: 11 });
   expect(await screen.findByText("申请发言")).toBeTruthy();
   stream.emit("participant.status", 2, { participant_id: 11, status: "speaking", action: "rebut" });
-  expect(await screen.findByText("发言中")).toBeTruthy();
+  expect(await screen.findByText(/^发言中/)).toBeTruthy();
   stream.emit("message.created", 3, { message_id: 42, speaker_id: 11, sequence: 1, content: "针对前一观点，我提出反驳。", action: "rebut" });
   stream.emit("message.created", 3, { message_id: 42, speaker_id: 11, sequence: 1, content: "针对前一观点，我提出反驳。", action: "rebut" });
   expect((await screen.findAllByText("针对前一观点，我提出反驳。")).length).toBe(1);
-  expect(await screen.findByText(/· 反驳$/)).toBeTruthy();
+  expect((await screen.findAllByText(/· 反驳$/)).length).toBe(2);
   insightReady = true;
   stream.emit("insights.updated", 4, { insight_ids: [3] });
   expect(await screen.findByText("已发表的共识")).toBeTruthy();

@@ -30,6 +30,10 @@ test("real browser completes create, roster, SSE discussion, insights, summary a
   expect((await (await page.request.post(`/api/v1/discussions/${id}/confirm`)).json()).status).toBe("confirmed");
   expect(await (await page.request.get(`/api/v1/discussions/${id}/participants`)).json()).toHaveLength(5);
   await page.getByRole("button", { name: "开始真实讨论" }).click();
+  await expect(page.locator(".participant-card")).toHaveCount(5);
+  await expect(page.locator(".participant-focus").first()).toContainText("公开关注点");
+  await expect(page.locator('.participant-card[data-status="hand_raised"]')).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('.participant-card[data-status="preparing"]')).toBeVisible({ timeout: 20_000 });
   await expect(page.locator(".participants article.speaking")).toBeVisible();
   await expect(page.locator(".transcript article").first()).toContainText("围绕");
   await expect(page.locator(".insights .active")).toHaveCount(2, { timeout: 30_000 });
@@ -52,6 +56,27 @@ test("real browser completes create, roster, SSE discussion, insights, summary a
   await expect(page.locator(".pill")).toHaveText("讨论完成");
   await expect(page.locator(".transcript article")).toHaveCount(messages.length);
   await expect(page.locator(".transcript footer")).toContainText("主持人总结");
+});
+
+test("rejoining a running full-budget discussion restores history and resumes SSE without duplicates", async ({ page }) => {
+  test.setTimeout(55_000);
+  const topic = `完整预算运行中重入 ${Date.now()}`;
+  const id = await create(page, topic);
+  await page.getByRole("button", { name: "确认阵容，进入演播厅" }).click();
+  await page.getByRole("button", { name: "开始真实讨论" }).click();
+  await expect(page.locator(".transcript article")).toHaveCount(3, { timeout: 20_000 });
+  await page.reload();
+  await page.getByRole("button", { name: new RegExp(topic) }).click();
+  await expect(page.locator(".pill")).toHaveText("讨论进行中");
+  expect(await page.locator(".transcript article").count()).toBeGreaterThanOrEqual(3);
+  await expect(page.locator(".pill")).toHaveText("讨论完成", { timeout: 35_000 });
+  await expect(page.locator(".transcript article")).toHaveCount(18);
+  const messages = await (await page.request.get(`/api/v1/discussions/${id}/transcript`)).json();
+  expect(messages).toHaveLength(18);
+  expect(new Set(messages.map((message: { id: number }) => message.id)).size).toBe(18);
+  expect(messages.map((message: { sequence: number }) => message.sequence)).toEqual(Array.from({ length: 18 }, (_, index) => index + 1));
+  const insightEvents = (await (await page.request.get(`/api/v1/discussions/${id}/events`)).text()).match(/event: insights.updated/g) ?? [];
+  expect(insightEvents.length).toBeGreaterThanOrEqual(4);
 });
 
 test("stopping one discussion does not affect another and both persist", async ({ page }) => {
@@ -91,7 +116,7 @@ test("new transcript follows live messages but preserves the reader's history po
   await expect(transcript.locator("article")).toHaveCount(4, { timeout: 20_000 });
   await expect.poll(() => transcript.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
   await transcript.evaluate(el => { el.style.scrollBehavior = "auto"; el.scrollTop = 0; });
-  await expect(transcript.locator("article")).toHaveCount(6, { timeout: 20_000 });
+  await expect.poll(() => transcript.locator("article").count(), { timeout: 20_000 }).toBeGreaterThan(4);
   expect(await transcript.evaluate(el => el.scrollTop)).toBeLessThan(30);
   await expect(page.locator(".pill")).toHaveText("讨论完成", { timeout: 20_000 });
 });
