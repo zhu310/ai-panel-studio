@@ -1,4 +1,4 @@
-# 初步架构方案
+# 实际架构方案
 
 ## 技术选型
 推荐 React + TypeScript + Vite、FastAPI、SQLAlchemy + SQLite、SSE、pytest 与 Playwright。LLM 仅由后端经 OpenAI-Compatible 适配器调用。该组合满足本地 MVP，避免微服务与非必要依赖。
@@ -7,58 +7,53 @@
 ```mermaid
 flowchart LR
 UI[React 客户端]--REST-->API[FastAPI API]
-UI--SSE-->HUB[Discussion Event Hub]
-API-->SVC[Discussion Service]-->ORCH[Orchestrator]
-ORCH-->LLM[LLM Adapter]
-SVC-->REPO[Repository]-->DB[(SQLite)]
-ORCH-->HUB
-SVC-->HUB
+UI--SSE 轮询持久化事件-->API
+API-->SVC[Discussion Service / Orchestrator]
+SVC-->LLM[OpenAI-Compatible LLM Adapter]
+API-->DB[(SQLite)]
+SVC-->DB
 ```
 
 ## 模块职责
 | 模块 | 职责 |
 |---|---|
 | API | 请求校验、资源路由、错误映射、SSE 订阅边界 |
-| Discussion Service | 生命周期、事务、多讨论边界 |
-| Orchestrator | 选行动、上下文、限轮次与结束条件 |
+| Discussion Service / Orchestrator | 生命周期、短事务、模型调度、上下文、限轮次与讨论级锁 |
 | LLM Adapter | Prompt、结构化输出、超时/重试/归一化 |
-| Repository | 持久化访问 |
-| Event Hub | 按 discussion_id 广播与重放 |
+| SQLAlchemy Session | 直接访问 SQLite；本 MVP 未额外实现 Repository 抽象 |
+| Persisted SSE stream | 按 discussion_id 与 sequence 轮询、回放 `discussion_events`；没有独立内存 Event Hub |
 | UI | 列表、阵容确认和独立滚动的演播厅 |
 
 ## 实体关系
 ```mermaid
 erDiagram
 DISCUSSION ||--o{ PARTICIPANT : has
-DISCUSSION ||--o{ TRANSCRIPT : contains
+DISCUSSION ||--o{ MESSAGE : contains
 DISCUSSION ||--o{ DISCUSSION_EVENT : records
-DISCUSSION ||--o{ CONSENSUS : derives
-DISCUSSION ||--o{ DISAGREEMENT : derives
-PARTICIPANT ||--o{ TRANSCRIPT : speaks
-TRANSCRIPT ||--o{ INSIGHT_EVIDENCE : supports
-CONSENSUS ||--o{ INSIGHT_EVIDENCE : cited_by
-DISAGREEMENT ||--o{ INSIGHT_EVIDENCE : cited_by
+DISCUSSION ||--o{ DISCUSSION_INSIGHT : derives
+PARTICIPANT ||--o{ MESSAGE : speaks
+MESSAGE ||--o{ INSIGHT_EVIDENCE : supports
+DISCUSSION_INSIGHT ||--o{ INSIGHT_EVIDENCE : cites
 ```
-Discussion 管理议题、状态、轮次与版本；Participant 是身份/立场；Transcript 是公开事实；Event 是运行审计与同步；共识/分歧含证据锚点。字段与迁移留待阶段 1。
+Discussion 管理议题和生命周期；Participant 是身份/公开立场；Message 是公开 Transcript 事实；DiscussionEvent 是运行审计与 SSE 数据源；DiscussionInsight 以 kind 区分共识/分歧，并通过 InsightEvidence 关联真实 Message。完整字段见 `docs/SCHEMA.md`。
 
 ## 生命周期和调度
 ```mermaid
 stateDiagram-v2
 [*]-->draft
 draft-->roster_ready: 生成阵容
-roster_ready-->running: 用户确认
-running-->completing: 达到轮次/目标/取消
-completing-->completed: 总结持久化
-draft-->failed
-roster_ready-->failed
+roster_ready-->confirmed: 用户确认
+confirmed-->running: 启动讨论
+running-->completed: 总结持久化
+running-->stopped: 用户停止
 running-->failed
 ```
-每场有独立 OrchestrationSession 和事实记录。每步读取有限上下文，根据主持节奏、回应相关性、分歧、观点覆盖、发言冷却与剩余轮次选择 `moderate/invite/rebut/elaborate/close`。规则层约束上限/冷却/结束，模型只出候选，确保动态可控。公开回复校验角色、JSON Schema、1–2 句及字符上限；失败最多一次纠正重试，随后显式失败。
+每场由 `DiscussionManager` 维护按 discussion_id 分区的 asyncio Task 和 Lock；业务事实全部写入 SQLite，不存在独立 OrchestrationSession 存储。每一步把议题、嘉宾公开立场、最近八条发言、发言次数、尚未参与专家和剩余预算交给模型，由模型提出 speaker/action/text/focus/finish。程序校验角色动作、首轮主持、禁止连续独白、句数/160 字、重复内容、全员参与和预算覆盖；失败最多纠正一次。动作集合是 `open/invite/answer/add/rebut/question/interrupt/moderate`，最终总结是单独的 `summary` Message。
 
 ## API、SSE、隔离与错误
-REST 按 discussions、roster、lifecycle、transcripts、insights 分类，使用版本化 DTO，不暴露 ORM/原始模型 JSON。SSE 事件含 `id,type,discussion_id,occurred_at,payload`；类型包括状态变更、发言、洞见、生命周期、错误。客户端以 Last-Event-ID 重连，服务端从持久化事件补发后订阅 Hub。Transcript 是业务事实，事件是变化通知/审计。
+REST 按 discussions、roster、lifecycle、transcript、insights 分类，使用 Pydantic DTO，不直接返回 ORM。SSE 帧的 `id` 是场内事件 sequence，`event` 是事件类型，`data` 含 `discussion_id、sequence、type、payload`；当前 wire data **没有** `occurred_at` 字段。客户端用 `after` 或 `Last-Event-ID` 补读，服务端持续轮询 `discussion_events`，终态补发完毕后关闭。Transcript 是业务事实，事件是变化通知与审计；举手、准备和发言状态不会写入 Message。
 
-所有查询、缓存键、SSE 通道、编排任务和前端 store 均以 discussion_id 分区，禁止“当前讨论”全局变量。短事务写入，SQLite 是单进程 MVP 约束。输入为可读 4xx，非法状态为冲突；模型超时/格式错误记录受限诊断并广播可恢复错误，不泄露密钥/Prompt。
+所有查询、SSE 读取、编排任务和前端当前视图均以 discussion_id 校验或分区。短事务写入，SQLite 是单进程 MVP 约束。输入为可读 4xx，非法状态为冲突；模型超时/格式错误在阵容阶段返回 502，在运行阶段写 `discussion.error` 并转为 failed，不泄露密钥或完整 Prompt。
 
 ## 待确认决策
 已确认：专家数 2–6（默认 4）；公开发言预算默认约 18 条、上限 24 条且可提前结束；模型格式纠正重试最多 1 次；用户可停止并保留已有数据。所有讨论的上下文、数据、事件和任务必须隔离。

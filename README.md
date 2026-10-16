@@ -48,7 +48,7 @@ npm run dev -- --host 127.0.0.1
 
 ## 已实现 API 与测试
 
-核心 API：`POST/GET /api/v1/discussions`、`GET /api/v1/discussions/{id}`、`POST .../{id}/roster|confirm|start|stop`、`GET .../{id}/participants|transcript|insights|events`。请求/响应及 SSE 事件详见 [API](docs/API.md)。默认四专家；公开发言预算默认 18、允许 4–24，包含最终总结，可提前结束或手动停止。
+核心 API：`POST/GET /api/v1/discussions`、`GET /api/v1/discussions/{id}`、`POST .../{id}/roster|confirm|start|stop`、`GET .../{id}/participants|transcript|insights|events`。请求/响应及 SSE 事件详见 [API](docs/API.md)。默认四专家；公开发言预算默认 18、协议范围 4–24，且不得少于“专家数 + 2”（为主持开场、每位专家至少一次参与和总结保留空间），包含最终总结，可提前结束或手动停止。
 
 ```powershell
 # 根目录：独立临时 SQLite，Fake LLM，不调用真实模型
@@ -62,7 +62,7 @@ npm run build
 npm run test:e2e
 ```
 
-Playwright 自动启动 Vite 和注入 Fake LLM 的测试后端，使用独立临时数据库并在退出时清理；不会污染开发数据库，也不会消费真实模型额度。浏览器截图保存在 `docs/evidence/`。可选的真实模型短讨论：从根目录运行 `python -m backend.app.real_smoke --experts 4 --budget 6`；它会实际调用模型、消耗额度，但使用独立临时库，不输出密钥。实际执行证据见 [测试报告](docs/TEST_REPORT.md)。
+Playwright 自动启动 Vite 和注入 Fake LLM 的测试后端，使用独立临时数据库并在退出时清理；不会污染开发数据库，也不会消费真实模型额度。浏览器截图保存在 `docs/evidence/`。可选的真实模型验收：从根目录运行 `python -m backend.app.real_smoke --experts 4 --budget 18 --timeout 600`；它会实际调用模型、消耗额度，但使用独立临时库，不输出密钥，并报告发言顺序、洞见证据及可获得的 token 用量。实际执行证据与本次长讨论的超时边界见 [测试报告](docs/TEST_REPORT.md)。
 
 ## 限制
 
