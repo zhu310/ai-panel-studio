@@ -18,6 +18,7 @@ dist/
 coverage/
 test-results/
 playwright-report/
+delivery/
 *.tsbuildinfo
 
 # Runtime data and local logs
