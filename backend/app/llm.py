@@ -1,5 +1,6 @@
 """Small OpenAI-compatible adapter. No model response is trusted until validated."""
 import json
+import time
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 from .config import settings
@@ -46,6 +47,8 @@ class InsightBatch(BaseModel):
 class OpenAICompatibleLLM:
     def __init__(self):
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        self.request_count = 0
+        self.calls = []
 
     async def json(self, system: str, user: str, schema: type[BaseModel]):
         if not settings.openai_api_key:
@@ -54,6 +57,8 @@ class OpenAICompatibleLLM:
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         async with httpx.AsyncClient(timeout=50) as client:
             for attempt in range(2):
+                started_at = time.perf_counter()
+                self.request_count += 1
                 try:
                     response = await client.post(
                         endpoint,
@@ -66,16 +71,27 @@ class OpenAICompatibleLLM:
                     for key in self.usage:
                         self.usage[key] += int(body.get("usage", {}).get(key) or 0)
                     raw = body["choices"][0]["message"]["content"]
-                    return schema.model_validate(json.loads(raw))
+                    parsed = schema.model_validate(json.loads(raw))
+                    self.calls.append({"schema": schema.__name__, "attempt": attempt + 1,
+                                       "seconds": time.perf_counter() - started_at, "status": "ok"})
+                    return parsed
                 except (json.JSONDecodeError, ValidationError, KeyError, IndexError) as exc:
+                    self.calls.append({"schema": schema.__name__, "attempt": attempt + 1,
+                                       "seconds": time.perf_counter() - started_at, "status": "invalid"})
                     if attempt:
                         fields = ",".join(".".join(map(str, error["loc"])) for error in exc.errors()) if isinstance(exc, ValidationError) else "JSON"
                         raise ModelError(f"模型连续两次返回不符合结构要求的内容（{fields}）") from exc
                     messages.extend([{"role": "assistant", "content": raw if "raw" in locals() else ""},
                                      {"role": "user", "content": "仅返回符合指定 JSON 结构的对象，纠正上次格式错误。"}])
                 except httpx.HTTPStatusError as exc:
+                    self.calls.append({"schema": schema.__name__, "attempt": attempt + 1,
+                                       "seconds": time.perf_counter() - started_at,
+                                       "status": f"http_{exc.response.status_code}"})
                     raise ModelError(f"模型接口 HTTP {exc.response.status_code}；请检查模型名称、密钥和服务地址") from exc
                 except httpx.RequestError as exc:
+                    self.calls.append({"schema": schema.__name__, "attempt": attempt + 1,
+                                       "seconds": time.perf_counter() - started_at,
+                                       "status": type(exc).__name__})
                     raise ModelError(f"模型接口连接失败：{type(exc).__name__}") from exc
 
 

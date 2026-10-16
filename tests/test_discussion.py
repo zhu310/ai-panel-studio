@@ -6,9 +6,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from backend.app.api import app
 from backend.app.database import Base, engine, SessionLocal
-from backend.app.models import Discussion, DiscussionStatus, Message, DiscussionEvent, DiscussionInsight
+from backend.app.models import (Discussion, DiscussionStatus, Participant, ParticipantRole,
+                                Message, DiscussionEvent, DiscussionInsight)
 from backend.app.llm import Guest, Roster, Turn, InsightBatch, InsightCandidate, ModelError
-from backend.app.discussion_service import run_discussion, Summary, compact_public_text, validate_turn
+from backend.app.discussion_service import (run_discussion, Summary, compact_public_text,
+                                            validate_turn, turn_prompt)
 from backend.app.discussion_service import save_insights
 
 class FakeLLM:
@@ -52,6 +54,17 @@ def test_public_text_compaction_preserves_sentence_boundaries():
     long_text = "这个方案有收益，" + "但必须有可验证的课程目标，" * 12 + "才能推广。另一个争议仍需讨论。第三句不能出现。"
     result = compact_public_text(long_text)
     assert len(result) <= 160 and result.endswith("。") and "第三句" not in result
+
+def test_turn_prompt_explicitly_blocks_reselecting_last_speaker():
+    host = Participant(id=10, discussion_id=1, role=ParticipantRole.HOST, name="主持",
+                       title="主持人", background="教育", stance="中立", color="#112233")
+    expert = Participant(id=11, discussion_id=1, role=ParticipantRole.EXPERT, name="专家",
+                         title="教授", background="教育", stance="审慎", color="#223344")
+    opening = Message(id=1, discussion_id=1, speaker_id=10, sequence=1, content="欢迎讨论。")
+    system, user = turn_prompt("高校 AI 助教", [host, expert], [opening], 18)
+    assert "speaker_id 绝不能与上一位发言者相同" in system
+    assert "主持人开场后的下一位必须是专家" in system
+    assert "上一位发言者 ID：10" in user
 
 def test_roster_confirm_and_duplicate_generation():
     with TestClient(app) as client:

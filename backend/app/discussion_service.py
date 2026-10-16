@@ -71,7 +71,9 @@ def transcript_context(topic: str, people: list[Participant], messages: list[Mes
                        for m in messages[-8:])
     counts = Counter(m.speaker_id for m in messages)
     uncovered = [p.name for p in people if p.role == ParticipantRole.EXPERT and counts[p.id] == 0]
+    last_speaker = messages[-1].speaker_id if messages else "无"
     return (f"议题：{topic}\n嘉宾：\n{profiles}\n已公开发言：{len(messages)}/{budget}\n"
+            f"上一位发言者 ID：{last_speaker}；下一位 speaker_id 不得与其相同。\n"
             f"发言次数：{dict(counts)}\n尚未参与的专家：{uncovered or '无'}\n最近发言：\n{recent or '尚无'}")
 
 
@@ -124,6 +126,7 @@ def compact_public_text(value: str) -> str:
 def turn_prompt(topic: str, people: list[Participant], messages: list[Message], budget: int):
     system = ("你主持真实的中文专家圆桌讨论。只输出 JSON：speaker_id 整数、action、text、focus、hand_raised、finish。"
               "action 只能是 open/invite/answer/add/rebut/question/interrupt/moderate。首条主持人 open。"
+              "只要已有发言，speaker_id 绝不能与上一位发言者相同；主持人开场后的下一位必须是专家并使用专家动作。"
               "后续从专家主动回应、反驳、追问和主持串联中按上下文动态选择；不可固定轮询。"
               "引用或回应此前具体观点；每次 text 一至两句，最好少于 90 字，硬上限 160 字。focus 是公开关注点，不是思维链。"
               "主持人应在开场后按讨论进展适时用 invite 或 moderate 追问和串联，而不是固定轮询。"

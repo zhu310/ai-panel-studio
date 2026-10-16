@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Isolated low-budget live DeepSeek verification")
+    parser = argparse.ArgumentParser(description="Isolated live DeepSeek verification")
     parser.add_argument("--experts", type=int, default=2, choices=range(2, 7))
     parser.add_argument("--budget", type=int, default=4, choices=range(4, 25))
     parser.add_argument("--timeout", type=int, default=600, help="maximum discussion wait in seconds")
@@ -39,11 +39,13 @@ def main():
             })
             created.raise_for_status()
             did = created.json()["id"]
+            roster_started_at = time.perf_counter()
             roster = client.post(f"/api/v1/discussions/{did}/roster")
+            roster_seconds = time.perf_counter() - roster_started_at
             if roster.status_code != 200:
                 print(f"真实阵容生成失败：HTTP {roster.status_code}，{roster.json().get('detail', '未知错误')}")
                 return finish(1)
-            print(f"真实阵容生成成功：{len(roster.json())} 位参与者")
+            print(f"真实阵容生成成功：{len(roster.json())} 位参与者，耗时={roster_seconds:.1f}s")
             client.post(f"/api/v1/discussions/{did}/confirm").raise_for_status()
             started_at = time.perf_counter()
             client.post(f"/api/v1/discussions/{did}/start", json={"message_budget": args.budget}).raise_for_status()
@@ -82,6 +84,14 @@ def main():
             print("洞见更新时间：" + ("，".join(f"事件#{event_seq}/发言后{count}" for event_seq, count in insight_timing) or "无"))
             usage = getattr(app.state.llm, "usage", {})
             print("Token 用量：" + (", ".join(f"{key}={value}" for key, value in usage.items()) if usage else "服务未返回"))
+            calls = getattr(app.state.llm, "calls", [])
+            print(f"模型 API 请求次数：{getattr(app.state.llm, 'request_count', len(calls))}")
+            if calls:
+                print("单次调用：" + "，".join(
+                    f"#{index + 1} {call['schema']}/尝试{call['attempt']}/{call['status']}/{call['seconds']:.1f}s"
+                    for index, call in enumerate(calls)))
+                durations = [call["seconds"] for call in calls]
+                print(f"调用耗时统计：平均={sum(durations) / len(durations):.1f}s，最大={max(durations):.1f}s，总计={sum(durations):.1f}s")
             print(f"主持总结：{detail.get('summary') or '无'}")
             if detail["status"] != "completed":
                 with SessionLocal() as db:
