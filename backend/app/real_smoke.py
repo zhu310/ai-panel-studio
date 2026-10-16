@@ -3,12 +3,17 @@
 Run from the repository root: python -m backend.app.real_smoke
 """
 import os
+import argparse
 import tempfile
 import time
 from pathlib import Path
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Isolated low-budget live DeepSeek verification")
+    parser.add_argument("--experts", type=int, default=2, choices=range(2, 7))
+    parser.add_argument("--budget", type=int, default=4, choices=range(4, 25))
+    args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="ai-panel-live-", ignore_cleanup_errors=True) as folder:
         os.environ["DATABASE_URL"] = "sqlite:///" + (Path(folder) / "smoke.db").as_posix()
         from fastapi.testclient import TestClient
@@ -28,7 +33,7 @@ def main():
         with TestClient(app) as client:
             created = client.post("/api/v1/discussions", json={
                 "topic": "高校使用生成式 AI 助教，应如何平衡教学效率、学习质量与隐私？",
-                "expert_count": 2,
+                "expert_count": args.experts,
             })
             created.raise_for_status()
             did = created.json()["id"]
@@ -38,7 +43,7 @@ def main():
                 return finish(1)
             print(f"真实阵容生成成功：{len(roster.json())} 位参与者")
             client.post(f"/api/v1/discussions/{did}/confirm").raise_for_status()
-            client.post(f"/api/v1/discussions/{did}/start", json={"message_budget": 4}).raise_for_status()
+            client.post(f"/api/v1/discussions/{did}/start", json={"message_budget": args.budget}).raise_for_status()
             for _ in range(180):
                 detail = client.get(f"/api/v1/discussions/{did}").json()
                 if detail["status"] in ("completed", "failed", "stopped"):

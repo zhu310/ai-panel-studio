@@ -1,6 +1,7 @@
 import asyncio
 import re
 import time
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from backend.app.api import app
@@ -67,7 +68,7 @@ def test_full_run_insight_evidence_and_event_order():
         client.post(f"/api/v1/discussions/{did}/confirm")
         with SessionLocal.begin() as db:
             db.get(Discussion, did).status = DiscussionStatus.RUNNING
-        asyncio.run(run_discussion(app, did, 4))
+        asyncio.run(run_discussion(app, did, 5))
         detail = client.get(f"/api/v1/discussions/{did}").json()
         with SessionLocal() as db:
             failure = db.scalar(select(DiscussionEvent).where(DiscussionEvent.discussion_id == did,
@@ -123,7 +124,7 @@ def test_start_sse_replay_and_duplicate_start():
         did = client.post("/api/v1/discussions", json={"topic":"回放测试"}).json()["id"]
         assert client.post(f"/api/v1/discussions/{did}/roster").status_code == 200
         assert client.post(f"/api/v1/discussions/{did}/confirm").status_code == 200
-        assert client.post(f"/api/v1/discussions/{did}/start", json={"message_budget":4}).status_code == 202
+        assert client.post(f"/api/v1/discussions/{did}/start", json={"message_budget":5}).status_code == 202
         assert client.post(f"/api/v1/discussions/{did}/start").status_code == 409
         for _ in range(100):
             if client.get(f"/api/v1/discussions/{did}").json()["status"] == "completed": break
@@ -133,6 +134,19 @@ def test_start_sse_replay_and_duplicate_start():
         assert "event: message.created" in wire and "event: insights.updated" in wire
         replay = client.get(f"/api/v1/discussions/{did}/events?after=2").text
         assert "id: 1\n" not in replay and "id: 2\n" not in replay
+        header_replay = client.get(f"/api/v1/discussions/{did}/events", headers={"Last-Event-ID": "2"}).text
+        assert "id: 1\n" not in header_replay and "id: 2\n" not in header_replay
+
+def test_startup_marks_orphan_running_failed_and_preserves_history():
+    with SessionLocal.begin() as db:
+        item = Discussion(topic="进程重启恢复", expert_count=2, status=DiscussionStatus.RUNNING)
+        db.add(item); db.flush(); did = item.id
+    with TestClient(app) as client:
+        detail = client.get(f"/api/v1/discussions/{did}").json()
+        assert detail["status"] == "failed"
+        wire = client.get(f"/api/v1/discussions/{did}/events").text
+        assert "event: discussion.error" in wire
+        assert "event: discussion.status" in wire
 
 def test_stop_cancels_future_messages():
     class SlowFake(FakeLLM):
@@ -198,7 +212,7 @@ def test_two_running_discussions_complete_independently():
             client.post(f"/api/v1/discussions/{did}/confirm")
             ids.append(did)
         for did in ids:
-            assert client.post(f"/api/v1/discussions/{did}/start", json={"message_budget":4}).status_code == 202
+            assert client.post(f"/api/v1/discussions/{did}/start", json={"message_budget":5}).status_code == 202
         for _ in range(100):
             if all(client.get(f"/api/v1/discussions/{did}").json()["status"] == "completed" for did in ids): break
             time.sleep(.05)
@@ -209,3 +223,34 @@ def test_two_running_discussions_complete_independently():
             first = {m.id for m in db.scalars(select(Message).where(Message.discussion_id == ids[0])).all()}
             second = {m.id for m in db.scalars(select(Message).where(Message.discussion_id == ids[1])).all()}
             assert first.isdisjoint(second)
+
+@pytest.mark.parametrize("budget", [18, 24])
+def test_public_message_budget_reaches_limit_without_infinite_loop(budget, monkeypatch):
+    class BudgetFake(FakeLLM):
+        async def json(self, system, user, schema):
+            if schema is Turn:
+                ids = [int(x) for x in re.findall(r"^(\d+) .+（", user, re.MULTILINE)]
+                number = int(re.search(r"已公开发言：(\d+)/", user).group(1))
+                speaker = ids[0] if number == 0 else ids[1 + (number % 2)]
+                return Turn(speaker_id=speaker, action="open" if number == 0 else "answer",
+                            text=f"第{number+1}条：回应已有观点并要求进一步核验。", focus="事实核验", finish=False)
+            return await super().json(system, user, schema)
+
+    app.state.llm = BudgetFake()
+    original_sleep = asyncio.sleep
+    async def fast_sleep(_):
+        await original_sleep(0)
+    monkeypatch.setattr("backend.app.discussion_service.asyncio.sleep", fast_sleep)
+    with TestClient(app) as client:
+        did = client.post("/api/v1/discussions", json={"topic": f"预算{budget}"}).json()["id"]
+        assert client.post(f"/api/v1/discussions/{did}/roster").status_code == 200
+        assert client.post(f"/api/v1/discussions/{did}/confirm").status_code == 200
+        with SessionLocal.begin() as db:
+            db.get(Discussion, did).status = DiscussionStatus.RUNNING
+        asyncio.run(run_discussion(app, did, budget))
+        detail = client.get(f"/api/v1/discussions/{did}").json()
+        messages = client.get(f"/api/v1/discussions/{did}/transcript").json()
+        assert detail["status"] == "completed"
+        assert len(messages) == budget
+        assert messages[-1]["action"] == "summary"
+        assert all(len(message["content"]) <= 160 for message in messages[:-1])

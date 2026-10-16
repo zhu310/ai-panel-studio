@@ -25,7 +25,9 @@ class Roster(BaseModel):
 class Turn(BaseModel):
     speaker_id: int
     action: str = Field(pattern=r"^(open|invite|answer|add|rebut|question|interrupt|moderate)$")
-    text: str = Field(min_length=2, max_length=220)
+    # The public 160-character limit is enforced after sentence compaction.
+    # A longer model draft must survive schema parsing to reach that step.
+    text: str = Field(min_length=2, max_length=2000)
     focus: str = Field(default="", max_length=120)
     hand_raised: bool = False
     finish: bool = False
@@ -61,7 +63,8 @@ class OpenAICompatibleLLM:
                     return schema.model_validate(json.loads(raw))
                 except (json.JSONDecodeError, ValidationError, KeyError, IndexError) as exc:
                     if attempt:
-                        raise ModelError("模型连续两次返回不符合结构要求的内容") from exc
+                        fields = ",".join(".".join(map(str, error["loc"])) for error in exc.errors()) if isinstance(exc, ValidationError) else "JSON"
+                        raise ModelError(f"模型连续两次返回不符合结构要求的内容（{fields}）") from exc
                     messages.extend([{"role": "assistant", "content": raw if "raw" in locals() else ""},
                                      {"role": "user", "content": "仅返回符合指定 JSON 结构的对象，纠正上次格式错误。"}])
                 except httpx.HTTPStatusError as exc:

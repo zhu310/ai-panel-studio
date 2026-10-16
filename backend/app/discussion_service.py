@@ -186,7 +186,7 @@ class DiscussionManager:
 
 async def run_discussion(app, discussion_id: int, budget: int):
     try:
-        turn_limit = min(budget, 23)  # Reserve the final public message for the host's summary.
+        turn_limit = min(budget - 1, 23)  # Reserve the final public message for the host's summary.
         for _ in range(turn_limit):
             with SessionLocal() as db:
                 discussion = db.get(Discussion, discussion_id)
