@@ -13,6 +13,12 @@
 
 真实 DeepSeek 命令：`python -X utf8 -m backend.app.real_smoke --experts 4 --budget 18`。话题为“高校是否应该全面推广生成式 AI 助教？”，阵容成功生成（1 主持人 + 4 专家）；234.5 秒后讨论仍为 `running`，已持久化 **12 条公开消息、2 条洞见、无总结**。脚本随后停止讨论并以非零状态退出。本次运行使用的是旧版诊断分支：部分失败时在打印顺序、分布和 token 统计前返回，临时数据库随后按设计删除，所以这些细项无法从本次运行追溯；不能推测或补造。之后只修复诊断脚本，使今后部分运行也先输出可用数据并支持 `--timeout`，没有重复进行昂贵调用。因此本次真实默认预算验收结论是 **部分成功，未完成全链路**。
 
+## 安全 ZIP 与干净目录复现
+
+`python scripts\package_delivery.py` 从干净的已提交 Git 树生成 `delivery/AI-Panel-Studio-stage4.5.zip`：67 个文件，486856 字节（最终文档提交后重新生成时字节数可能变化）。脚本拒绝 `.env`、SQLite、`node_modules`、`.venv`、缓存、构建物和测试产物，并把本地 `.env` 中长度足够的 key/secret 值与 ZIP 内每个文件逐一比对；未发现命中，也没有输出秘密值。
+
+将该 ZIP 解压到全新的 `delivery/verify-stage45-clean` 后实际执行：`python -m pytest -q` 为 **24 passed、2 warnings**；`npm ci` 从锁文件安装 **259 packages**；`npm test -- --run` 为 **4 passed**；`npm run build` 成功、34 modules transformed。该目录此前不存在且没有复制原工作区的依赖目录，证明源码包可按 README 的依赖步骤复现测试与构建。真实模型调用需使用者自行创建 `.env`，未在干净复现中消费额度；Playwright 已在原工作区完成 5/5 全量回归，没有在解压目录重复下载 Chromium。
+
 ## 自动化单元与接口测试
 
 | 命令（执行目录） | 实际结果 | 说明 |

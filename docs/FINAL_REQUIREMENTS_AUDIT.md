@@ -78,8 +78,8 @@
 | H-13 | 工作流 1–1.5 页 | `docs/WORKFLOW.md` | 人工文档审计 | 六个紧凑段落，未扩成流水账 | 满足 |
 | H-14 | 如实说明 Codex/DeepSeek | `WORKFLOW.md` 首段 | 文档审计 | 未声称使用 Claude Code | 满足 |
 | H-15 | 渐进 Git 历史 | `git log` | Git 审计 | 阶段 0–4 及本轮按性质提交 | 满足 |
-| H-16 | ZIP 无密钥/数据库/缓存 | `scripts/package_delivery.py` | ZIP 内容与敏感模式检查 | 最终 ZIP 生成后复核 | 见本报告“交付复现” |
-| H-17 | 干净解压/克隆可复现 | README、锁文件、requirements | clean ZIP pytest/npm ci/build | 最终 ZIP 生成后复核 | 见本报告“交付复现” |
+| H-16 | ZIP 无密钥/数据库/缓存 | `scripts/package_delivery.py` | ZIP 内容、禁入路径、本地 secret 值比对 | 67 文件；无禁入项或本地秘密命中 | 满足（自动检查） |
+| H-17 | 干净解压/克隆可复现 | README、锁文件、requirements | clean ZIP pytest/npm ci/test/build | 24 pytest、4 Vitest、build 均通过 | 满足（干净解压验证） |
 
 ## 缺口分级与处理
 
@@ -107,4 +107,4 @@ Playwright 5/5 覆盖：完整创建/阵容/状态/SSE/洞见/总结/刷新；�
 
 ## 交付复现
 
-最终提交前从新生成 ZIP 解压到干净临时目录，执行依赖安装、pytest 和前端生产构建；具体命令、结果及 ZIP 安全扫描结果同步记录于 `docs/TEST_REPORT.md`。本节不把尚未执行的命令预写为通过。
+从新生成 ZIP 解压到此前不存在的 `delivery/verify-stage45-clean`，实际完成 `python -m pytest -q`（24 passed）、`npm ci`（259 packages）、`npm test -- --run`（4 passed）和 `npm run build`（成功）。打包脚本同时检查禁入路径，并用本地 `.env` 中的 key/secret 值逐文件比对且不打印秘密；无命中。详见 `docs/TEST_REPORT.md`。
