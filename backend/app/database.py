@@ -1,3 +1,4 @@
+from pathlib import Path
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from .config import settings
@@ -5,6 +6,8 @@ from .config import settings
 def _sqlite_connect_args(url: str) -> dict:
     return {"check_same_thread": False} if url.startswith("sqlite") else {}
 
+if settings.database_url.startswith("sqlite:///./"):
+    Path(settings.database_url.removeprefix("sqlite:///./")).parent.mkdir(parents=True, exist_ok=True)
 engine = create_engine(settings.database_url, connect_args=_sqlite_connect_args(settings.database_url))
 if settings.database_url.startswith("sqlite"):
     @event.listens_for(engine, "connect")
