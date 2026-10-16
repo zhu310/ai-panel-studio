@@ -62,7 +62,7 @@ npm run build
 npm run test:e2e
 ```
 
-Playwright 自动启动 Vite 和注入 Fake LLM 的测试后端，使用独立临时数据库并在退出时清理；不会污染开发数据库，也不会消费真实模型额度。浏览器截图保存在 `docs/evidence/`。可选的真实模型验收：从根目录运行 `python -m backend.app.real_smoke --experts 4 --budget 18 --timeout 600`；它会实际调用模型、消耗额度，但使用独立临时库，不输出密钥，并报告发言顺序、洞见证据及可获得的 token 用量。实际执行证据与本次长讨论的超时边界见 [测试报告](docs/TEST_REPORT.md)。
+Playwright 自动启动 Vite 和注入 Fake LLM 的测试后端，使用独立临时数据库并在退出时清理；不会污染开发数据库，也不会消费真实模型额度。浏览器截图保存在 `docs/evidence/`。可选的真实模型验收：从根目录运行 `python -m backend.app.real_smoke --experts 4 --budget 18 --timeout 720`；它会实际调用模型、消耗额度，但使用独立临时库，不输出密钥，并报告发言顺序、洞见证据及可获得的 token 用量。历史失败、修复和最终结果见 [测试报告](docs/TEST_REPORT.md)。
 
 最终一次 `deepseek-flash` 四专家、18 条真实验收已完成；公开 Transcript、调用耗时和质量评价见 [真实模型验收报告](docs/REAL_MODEL_ACCEPTANCE.md)。
 

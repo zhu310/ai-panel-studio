@@ -21,7 +21,7 @@
 | B-07 | 重复请求不产生重复阵容 | `generate_roster` 幂等分支 | API 与 E2E 重复确认 | 人数和 ID 不增加 | 满足（代码+自动化） |
 | B-08 | 新真实讨论不误用 Mock | `RealApp.tsx` 与 `DemoApp` 路由隔离 | E2E 使用真实 API 层 | 模型失败直接报错，不降级 Mock | 满足（代码+自动化） |
 | C-01 | 主持人开场 | 调度 Prompt 与首轮校验 | 默认预算 Fake 集成、E2E | 第一条为主持人 | 满足（代码+自动化） |
-| C-02 | 主持人追问、串联并适时介入 | `discussion_service.py:125-131` | `test_default_budget...` | Fake 顺序含主持人中途重新介入 | 满足（受控自动化）；真实长场未取回顺序 |
+| C-02 | 主持人追问、串联并适时介入 | `discussion_service.py:125-131` | `test_default_budget...`；真实 18 条验收 | 真实顺序含 4 次 invite、1 次 moderate，并引用前述认知、公平和经费观点 | 满足（自动化+真实模型） |
 | C-03 | 专家主动举手 | `llm.py:Turn.hand_raised`；service `:231` | 单元、E2E 状态断言 | action 校验后独立持久事件 | 满足（代码+自动化） |
 | C-04 | 抢答或插话 | `Turn.action=interrupt` 与举手约束 | 默认预算 Fake 集成 | interrupt 必须伴随 hand_raised | 满足（代码+自动化） |
 | C-05 | 补充观点 | `action=add`；Prompt 要求关联上文 | Fake 集成 | 公开动作和文本共同入库 | 满足（代码+自动化） |
@@ -29,8 +29,8 @@
 | C-07 | 根据 Transcript 动态选人 | `transcript_context:66-75`、`choose_turn` | 默认预算 Fake 测试 | 每轮将近期发言、次数、未覆盖专家交给模型 | 满足（代码路径+自动化） |
 | C-08 | 非固定轮询 | 模型返回 `speaker_id`，仅做合法性/覆盖校验 | `test_default_budget...` | 顺序非 round-robin，可连续交锋 | 满足（代码+自动化） |
 | C-09 | 每次公开发言 1–2 句 | `validate_turn:78`、`compact_public_text` | 单元/集成 | 句数及 160 字硬限制 | 满足（代码+自动化） |
-| C-10 | 长度/终止正确 | `run_discussion:202`；`validate_turn:101-108` | 18/24、覆盖、过早 finish 测试 | 总结计预算；全部专家发言前禁止结束 | 满足（Fake 自动化）；真实 18 条未完成 |
-| C-11 | 主持自然语言总结 | `make_summary` 与主持 Message | 集成/E2E | 总结持久化并单独展示 | 满足（自动化）；阶段 4 真实短场已验证 |
+| C-10 | 长度/终止正确 | `run_discussion:202`；`validate_turn:101-108` | 18/24、覆盖、过早 finish 测试；真实 18 条验收 | 总结计预算；四专家全部参与后以第 18 条总结完成，状态 `completed` | 满足（自动化+真实模型） |
+| C-11 | 主持自然语言总结 | `make_summary` 与主持 Message | 集成/E2E；真实 18 条验收 | 完整总结准确覆盖立场变化、共识与分歧，并持久化为第 18 条 | 满足（自动化+真实模型） |
 | C-12 | action 生成、校验、执行、事件、显示闭环 | `llm.py`、`discussion_service.py:78-108,231-270`、`RealApp.tsx:145-198` | pytest/Vitest/E2E | 举手→准备→发言有可观察间隔，内部状态不进入 Transcript | 满足（代码+自动化） |
 | D-01 | 每位专家独立小窗 | `RealApp.tsx:193-199`；`real.css:10-22` | E2E `.participant-card` 数量 5 | 非普通列表，主持/专家独立卡片 | 满足（真实浏览器） |
 | D-02 | 待机/准备/发言中 | 同上及 SSE 状态映射 | E2E 依次捕获 hand/preparing/speaking | 状态视觉与事件一致 | 满足（真实浏览器 Fake 后端） |
@@ -49,7 +49,7 @@
 | F-03 | 顺序展示 | `(discussion_id, sequence)` 唯一约束 | pytest/E2E | 序号连续 | 满足（代码+自动化） |
 | F-04 | 持续查看新增 | EventSource + cursor | 重入 E2E | 运行中继续接收 | 满足（真实浏览器 Fake 后端） |
 | F-05 | 看历史时不强制到底 | `RealApp.tsx:139,166` | `discussion.spec.ts:117-120` | 滚回顶部后 scrollTop 保持 | 满足（真实浏览器） |
-| F-06 | 完成后自然语言总结 | summary 事件、详情字段、SummaryPanel | E2E；阶段 4 DeepSeek 短场 | 不显示 JSON | 满足（自动化+真实短场） |
+| F-06 | 完成后自然语言总结 | summary 事件、详情字段、SummaryPanel | E2E；最终 DeepSeek 18 条验收 | 第 18 条为完整自然语言总结，不显示内部 JSON | 满足（自动化+真实模型） |
 | F-07 | 刷新恢复记录 | load detail/transcript/insights | E2E reload | 数据来自 SQLite | 满足（真实浏览器） |
 | G-01 | SQLite | `database.py`、配置 | pytest | 测试和运行均 SQLite | 满足 |
 | G-02 | 前后端分离 | `backend/`、`frontend/` | 构建/E2E | Vite 代理 FastAPI | 满足 |
@@ -70,7 +70,7 @@
 | H-05 | ER 图 | `docs/ARCHITECTURE.md` Mermaid ER | 文档审计 | 与 models 对齐 | 满足 |
 | H-06 | 核心流程图 | `docs/ARCHITECTURE.md` Mermaid flow | 文档审计 | roster→confirm→run→SSE | 满足 |
 | H-07 | API 文档 | `docs/API.md` | OpenAPI/文档审计 | 已实现与约束准确 | 满足 |
-| H-08 | 测试代码/报告 | `tests/`、`frontend/e2e/`、`TEST_REPORT.md` | 全量回归 | 失败与修复亦如实记录 | 满足 |
+| H-08 | 测试代码/报告 | `tests/`、`frontend/e2e/`、`TEST_REPORT.md` | 最终 pytest 25 passed；Vitest 4 passed；Playwright 5 passed | 历史 21/24 与最终 25 均按阶段标注 | 满足 |
 | H-09 | README 配置/运行准确 | `README.md` | clean ZIP 复现 | 含初始化、双端、测试、真实验收 | 满足 |
 | H-10 | 至少五段真实核心 Prompt | `docs/prompts/00-05` | 文件审计 | 六段；01/02 已补回可核实完整原文 | 满足 |
 | H-11 | 覆盖 SDD/DDD/TDD/E2E | `01-sdd` 至 `04-e2e` | 文件审计 | 阶段映射明确 | 满足 |
@@ -78,8 +78,8 @@
 | H-13 | 工作流 1–1.5 页 | `docs/WORKFLOW.md` | 人工文档审计 | 六个紧凑段落，未扩成流水账 | 满足 |
 | H-14 | 如实说明 Codex/DeepSeek | `WORKFLOW.md` 首段 | 文档审计 | 未声称使用 Claude Code | 满足 |
 | H-15 | 渐进 Git 历史 | `git log` | Git 审计 | 阶段 0–4 及本轮按性质提交 | 满足 |
-| H-16 | ZIP 无密钥/数据库/缓存 | `scripts/package_delivery.py` | ZIP 内容、禁入路径、本地 secret 值比对 | 67 文件；无禁入项或本地秘密命中 | 满足（自动检查） |
-| H-17 | 干净解压/克隆可复现 | README、锁文件、requirements | clean ZIP pytest/npm ci/test/build | 24 pytest、4 Vitest、build 均通过 | 满足（干净解压验证） |
+| H-16 | ZIP 无密钥/数据库/缓存 | `scripts/package_delivery.py` | ZIP 内容、禁入路径、本地 secret 值比对 | 最终重新打包后 68 文件；无禁入项或本地秘密命中 | 满足（自动检查） |
+| H-17 | 干净解压/克隆可复现 | README、锁文件、requirements | 阶段 4.5 clean ZIP：24 pytest、4 Vitest、build；最终源码：25 pytest | 新增第 25 项仅为调度 Prompt 防回归测试 | 满足（干净解压+最终回归） |
 
 ## 缺口分级与处理
 
@@ -107,4 +107,4 @@ Playwright 5/5 覆盖：完整创建/阵容/状态/SSE/洞见/总结/刷新；�
 
 ## 交付复现
 
-从新生成 ZIP 解压到此前不存在的 `delivery/verify-stage45-clean`，实际完成 `python -m pytest -q`（24 passed）、`npm ci`（259 packages）、`npm test -- --run`（4 passed）和 `npm run build`（成功）。打包脚本同时检查禁入路径，并用本地 `.env` 中的 key/secret 值逐文件比对且不打印秘密；无命中。详见 `docs/TEST_REPORT.md`。
+阶段 4.5 从 ZIP 解压到此前不存在的 `delivery/verify-stage45-clean`，实际完成 `python -m pytest -q`（当时 24 passed）、`npm ci`（259 packages）、`npm test -- --run`（4 passed）和 `npm run build`（成功）。最终真实验收新增一项调度 Prompt 防回归测试，当前全量为 25 passed。打包脚本同时检查禁入路径，并用本地 `.env` 中的 key/secret 值逐文件比对且不打印秘密；无命中。详见 `docs/TEST_REPORT.md`。
