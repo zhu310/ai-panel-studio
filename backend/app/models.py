@@ -5,7 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
 
 class DiscussionStatus(str, enum.Enum):
-    DRAFT="draft"; ROSTER_READY="roster_ready"; RUNNING="running"; COMPLETED="completed"; STOPPED="stopped"; FAILED="failed"
+    DRAFT="draft"; ROSTER_READY="roster_ready"; CONFIRMED="confirmed"; RUNNING="running"; COMPLETED="completed"; STOPPED="stopped"; FAILED="failed"
 class ParticipantRole(str, enum.Enum):
     HOST="host"; EXPERT="expert"
 class InsightKind(str, enum.Enum):

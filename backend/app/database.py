@@ -4,7 +4,7 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from .config import settings
 
 def _sqlite_connect_args(url: str) -> dict:
-    return {"check_same_thread": False} if url.startswith("sqlite") else {}
+    return {"check_same_thread": False, "timeout": 15} if url.startswith("sqlite") else {}
 
 if settings.database_url.startswith("sqlite:///./"):
     Path(settings.database_url.removeprefix("sqlite:///./")).parent.mkdir(parents=True, exist_ok=True)
@@ -14,6 +14,7 @@ if settings.database_url.startswith("sqlite"):
     def _enable_foreign_keys(dbapi_connection, _):
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA busy_timeout=15000")
         cursor.close()
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)

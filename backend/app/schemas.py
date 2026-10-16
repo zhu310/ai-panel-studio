@@ -12,8 +12,10 @@ class ParticipantOut(BaseModel):
     model_config={"from_attributes":True}
 class MessageOut(BaseModel):
     id:int; speaker_id:int; sequence:int; content:str; created_at:datetime
+    action:str|None=None
     model_config={"from_attributes":True}
 class InsightOut(BaseModel):
     id:int; kind:InsightKind; content:str; is_active:bool; version:int; evidence_message_ids:list[int]=[]
 class DiscussionDetail(DiscussionOut):
     participants:list[ParticipantOut]=[]
+    summary:str|None=None
