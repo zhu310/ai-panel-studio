@@ -119,9 +119,10 @@ export default function RealApp({ onDemo }: { onDemo: () => void }) {
   };
 
   useEffect(() => {
-    if (!current || view !== "studio") return;
+    if (!current || view !== "studio" || terminal.has(current.status)) return;
     const id = current.id;
     const stream = new EventSource(`${base(id)}/events?after=${cursor.current}`);
+    let streamClosed = false;
     const names = ["discussion.status", "participant.status", "participant.hand_raised", "message.created", "insights.updated", "discussion.summary", "discussion.error"];
     const handle = (event: Event) => {
       const update = JSON.parse((event as MessageEvent).data) as StudioEvent;
@@ -132,7 +133,7 @@ export default function RealApp({ onDemo }: { onDemo: () => void }) {
       if (update.type === "discussion.status") {
         const status = String(payload.status);
         setCurrent(d => d && ({ ...d, status }));
-        if (terminal.has(status)) { setStatuses({}); stream.close(); }
+        if (terminal.has(status)) { setStatuses({}); setConnection(""); streamClosed = true; stream.close(); }
       } else if (update.type === "message.created") {
         const panel = transcriptRef.current;
         shouldFollow.current = !panel || panel.scrollHeight - panel.scrollTop - panel.clientHeight < 90;
@@ -157,8 +158,8 @@ export default function RealApp({ onDemo }: { onDemo: () => void }) {
       }
     };
     names.forEach(name => stream.addEventListener(name, handle));
-    stream.onerror = () => setConnection("实时连接中断，正在自动重连…");
-    return () => stream.close();
+    stream.onerror = () => { if (!streamClosed && activeId.current === id) setConnection("实时连接中断，正在自动重连…"); };
+    return () => { streamClosed = true; stream.close(); };
   }, [current?.id, current?.status, view]);
 
   useEffect(() => {

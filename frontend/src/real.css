@@ -5,3 +5,11 @@
 .roster .primary:disabled,.controls button:disabled,.hero button:disabled { opacity:.6; cursor:wait; }
 .transcript { scroll-behavior:smooth; }
 .studio .empty { padding:12px; }
+.studio>header div { min-width:0; overflow-wrap:anywhere; }
+.studio>header .pill { flex-shrink:0; }
+@media(max-width:850px){
+  .transcript{max-height:52vh}
+  .studio>header{display:grid;grid-template-columns:auto 1fr}
+  .studio>header div{grid-column:1/-1;grid-row:2}
+  .studio>header .pill{grid-column:2;grid-row:1;justify-self:end}
+}
