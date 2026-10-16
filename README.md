@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-项目处于**阶段 1：数据模型、基础 API 与测试**。已实现后端基础 API、SQLite Schema 和预设样例；未实现前端、LLM、讨论调度或 SSE。
+项目处于**阶段 3：真实 AI 圆桌讨论引擎**。已具备中文讨论大厅、真实嘉宾生成与确认、后端动态讨论、SSE、持久化 Transcript/洞见/总结，以及独立的阶段 2 Mock 演示入口。
 
 ## 文档入口
 
@@ -14,4 +14,8 @@
 - [验收矩阵](docs/ACCEPTANCE.md)
 - [阶段 0 提示词记录](docs/prompts/00-kickoff.md)
 
-运行：`python -m pip install -r requirements.txt`，随后 `python -m backend.app.init_db`、`python -m backend.app.seed`，并以 `python -m uvicorn backend.app.main:app --reload` 启动。OpenAPI 位于 `/docs`。
+后端运行：先 `python -m pip install -r requirements.txt`，按 [.env.example](.env.example) 配置根目录 `.env`，运行 `python -m backend.app.init_db`，可选 `python -m backend.app.seed`，再用 `python -m uvicorn backend.app.main:app --reload` 启动。OpenAPI 位于 `/docs`。API Key 仅由后端读取。
+
+前端运行：进入 `frontend`，执行 `npm install` 与 `npm run dev`。Vite 将 `/api` 代理到本地 FastAPI 端口 8000。首页创建讨论后调用真实模型生成阵容，确认后可启动讨论；“体验 Mock 演示”仍是独立入口。
+
+验证：仓库根目录执行 `python -m pytest -q`；前端目录执行 `npm run build`。少量真实模型烟雾测试可在根目录执行 `python -m backend.app.real_smoke`，该脚本使用临时 SQLite 库与四轮公开发言预算，不写入运行数据库。
