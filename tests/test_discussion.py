@@ -8,7 +8,7 @@ from backend.app.api import app
 from backend.app.database import Base, engine, SessionLocal
 from backend.app.models import Discussion, DiscussionStatus, Message, DiscussionEvent, DiscussionInsight
 from backend.app.llm import Guest, Roster, Turn, InsightBatch, InsightCandidate, ModelError
-from backend.app.discussion_service import run_discussion, Summary, compact_public_text
+from backend.app.discussion_service import run_discussion, Summary, compact_public_text, validate_turn
 from backend.app.discussion_service import save_insights
 
 class FakeLLM:
@@ -27,12 +27,14 @@ class FakeLLM:
             self.turns[topic] = self.turns.get(topic, 0) + 1
             turn_number = self.turns[topic]
             ids = [int(x) for x in re.findall(r"^(\d+) .+（", user, re.MULTILINE)]
-            # Host, expert 2, expert 1, expert 2: a deliberate non-round-robin interaction.
-            sequence = [(ids[0], "open"), (ids[2], "answer"), (ids[1], "rebut"), (ids[2], "add")]
-            speaker, action = sequence[min(turn_number - 1, 3)]
+            # All experts participate; the host re-enters and expert 2 speaks twice.
+            sequence = [(ids[0], "open", False), (ids[2], "answer", False),
+                        (ids[1], "rebut", True), (ids[0], "moderate", False),
+                        (ids[3], "add", False), (ids[4], "interrupt", True)]
+            speaker, action, raised = sequence[min(turn_number - 1, 5)]
             return Turn(speaker_id=speaker, action=action,
                         text=f"第{turn_number}轮：针对上一观点提出具体条件。", focus="讨论实施条件",
-                        hand_raised=turn_number == 3, finish=turn_number == 4)
+                        hand_raised=raised, finish=turn_number == 6)
         if schema is InsightBatch:
             return InsightBatch(items=[InsightCandidate(kind="disagreement", content="实施条件仍存在实质差异", evidence_sequences=[2, 3])])
         if schema is Summary:
@@ -68,15 +70,15 @@ def test_full_run_insight_evidence_and_event_order():
         client.post(f"/api/v1/discussions/{did}/confirm")
         with SessionLocal.begin() as db:
             db.get(Discussion, did).status = DiscussionStatus.RUNNING
-        asyncio.run(run_discussion(app, did, 5))
+        asyncio.run(run_discussion(app, did, 7))
         detail = client.get(f"/api/v1/discussions/{did}").json()
         with SessionLocal() as db:
             failure = db.scalar(select(DiscussionEvent).where(DiscussionEvent.discussion_id == did,
                 DiscussionEvent.event_type == "discussion.error"))
         assert detail["status"] == "completed" and detail["summary"], failure.payload if failure else None
         messages = client.get(f"/api/v1/discussions/{did}/transcript").json()
-        assert len(messages) == 5
-        assert [m["speaker_id"] for m in messages[:4]] == [1, 3, 2, 3]
+        assert len(messages) == 7
+        assert [m["speaker_id"] for m in messages[:6]] == [1, 3, 2, 1, 4, 5]
         insight = client.get(f"/api/v1/discussions/{did}/insights").json()[0]
         assert insight["kind"] == "disagreement"
         assert len(insight["evidence_message_ids"]) == 2
@@ -124,9 +126,9 @@ def test_start_sse_replay_and_duplicate_start():
         did = client.post("/api/v1/discussions", json={"topic":"回放测试"}).json()["id"]
         assert client.post(f"/api/v1/discussions/{did}/roster").status_code == 200
         assert client.post(f"/api/v1/discussions/{did}/confirm").status_code == 200
-        assert client.post(f"/api/v1/discussions/{did}/start", json={"message_budget":5}).status_code == 202
+        assert client.post(f"/api/v1/discussions/{did}/start", json={"message_budget":7}).status_code == 202
         assert client.post(f"/api/v1/discussions/{did}/start").status_code == 409
-        for _ in range(100):
+        for _ in range(250):
             if client.get(f"/api/v1/discussions/{did}").json()["status"] == "completed": break
             time.sleep(.05)
         assert client.get(f"/api/v1/discussions/{did}").json()["status"] == "completed"
@@ -159,7 +161,7 @@ def test_stop_cancels_future_messages():
         did = client.post("/api/v1/discussions", json={"topic":"停止测试"}).json()["id"]
         client.post(f"/api/v1/discussions/{did}/roster")
         client.post(f"/api/v1/discussions/{did}/confirm")
-        assert client.post(f"/api/v1/discussions/{did}/start", json={"message_budget":4}).status_code == 202
+        assert client.post(f"/api/v1/discussions/{did}/start", json={"message_budget":7}).status_code == 202
         assert client.post(f"/api/v1/discussions/{did}/stop").json()["status"] == "stopped"
         time.sleep(.7)
         assert client.get(f"/api/v1/discussions/{did}/transcript").json() == []
@@ -212,13 +214,13 @@ def test_two_running_discussions_complete_independently():
             client.post(f"/api/v1/discussions/{did}/confirm")
             ids.append(did)
         for did in ids:
-            assert client.post(f"/api/v1/discussions/{did}/start", json={"message_budget":5}).status_code == 202
-        for _ in range(100):
+            assert client.post(f"/api/v1/discussions/{did}/start", json={"message_budget":7}).status_code == 202
+        for _ in range(250):
             if all(client.get(f"/api/v1/discussions/{did}").json()["status"] == "completed" for did in ids): break
             time.sleep(.05)
         for did in ids:
             assert client.get(f"/api/v1/discussions/{did}").json()["status"] == "completed"
-            assert len(client.get(f"/api/v1/discussions/{did}/transcript").json()) == 5
+            assert len(client.get(f"/api/v1/discussions/{did}/transcript").json()) == 7
         with SessionLocal() as db:
             first = {m.id for m in db.scalars(select(Message).where(Message.discussion_id == ids[0])).all()}
             second = {m.id for m in db.scalars(select(Message).where(Message.discussion_id == ids[1])).all()}
@@ -231,7 +233,7 @@ def test_public_message_budget_reaches_limit_without_infinite_loop(budget, monke
             if schema is Turn:
                 ids = [int(x) for x in re.findall(r"^(\d+) .+（", user, re.MULTILINE)]
                 number = int(re.search(r"已公开发言：(\d+)/", user).group(1))
-                speaker = ids[0] if number == 0 else ids[1 + (number % 2)]
+                speaker = ids[0] if number == 0 else ids[1 + ((number - 1) % 4)]
                 return Turn(speaker_id=speaker, action="open" if number == 0 else "answer",
                             text=f"第{number+1}条：回应已有观点并要求进一步核验。", focus="事实核验", finish=False)
             return await super().json(system, user, schema)
@@ -254,3 +256,87 @@ def test_public_message_budget_reaches_limit_without_infinite_loop(budget, monke
         assert len(messages) == budget
         assert messages[-1]["action"] == "summary"
         assert all(len(message["content"]) <= 160 for message in messages[:-1])
+
+
+def test_finish_requires_every_expert_to_participate():
+    from backend.app.models import Participant, ParticipantRole
+    people = [Participant(id=1, discussion_id=1, role=ParticipantRole.HOST, name="主持", title="主持",
+                          background="主持", stance="中立", color="#111111")]
+    people += [Participant(id=index, discussion_id=1, role=ParticipantRole.EXPERT, name=f"专家{index}",
+                           title="专家", background="领域", stance=f"立场{index}", color=f"#{index:06x}")
+               for index in range(2, 6)]
+    messages = [Message(id=number, discussion_id=1, speaker_id=speaker, sequence=number, content=f"已有发言{number}。")
+                for number, speaker in enumerate([1, 2, 3, 2], 1)]
+    with pytest.raises(ModelError, match="所有专家至少发言一次"):
+        validate_turn(Turn(speaker_id=4, action="add", text="补充一个不同条件。", finish=True),
+                      people, messages, 18)
+
+
+def test_start_rejects_budget_that_cannot_cover_roster():
+    with TestClient(app) as client:
+        did = client.post("/api/v1/discussions", json={"topic": "覆盖不足"}).json()["id"]
+        client.post(f"/api/v1/discussions/{did}/roster")
+        client.post(f"/api/v1/discussions/{did}/confirm")
+        response = client.post(f"/api/v1/discussions/{did}/start", json={"message_budget": 5})
+        assert response.status_code == 422
+        assert client.get(f"/api/v1/discussions/{did}").json()["status"] == "confirmed"
+
+
+def test_default_budget_has_dynamic_exchange_host_reentry_and_incremental_insights(monkeypatch):
+    class QualityFake(FakeLLM):
+        async def json(self, system, user, schema):
+            if schema is Turn:
+                ids = [int(x) for x in re.findall(r"^(\d+) .+（", user, re.MULTILINE)]
+                number = int(re.search(r"已公开发言：(\d+)/", user).group(1))
+                # Host re-enters at 6 and 11; expert 2 answers twice around expert 1's rebuttal.
+                order = [0, 2, 1, 2, 3, 0, 4, 1, 3, 2, 0, 4, 2, 1, 3, 4, 2]
+                speaker_index = order[number]
+                if speaker_index == 0:
+                    action = "open" if number == 0 else "moderate"
+                else:
+                    action = ["answer", "rebut", "add", "question", "interrupt"][number % 5]
+                raised = action == "interrupt"
+                return Turn(speaker_id=ids[speaker_index], action=action,
+                            text=f"第{number + 1}条回应前文的证据边界，并提出新的可核验条件。",
+                            focus=f"第{number + 1}阶段的公开核验重点", hand_raised=raised, finish=False)
+            if schema is InsightBatch:
+                sequences = [int(x) for x in re.findall(r"^#(\d+) ", user, re.MULTILINE)]
+                latest = sequences[-1]
+                return InsightBatch(items=[
+                    InsightCandidate(kind="consensus", content=f"截至第{latest}条，各方同意先核验实际效果",
+                                     evidence_sequences=sequences[-2:]),
+                    InsightCandidate(kind="disagreement", content=f"截至第{latest}条，实施边界仍有分歧",
+                                     evidence_sequences=sequences[-3:-1]),
+                ])
+            return await super().json(system, user, schema)
+
+    app.state.llm = QualityFake()
+    original_sleep = asyncio.sleep
+    async def fast_sleep(_):
+        await original_sleep(0)
+    monkeypatch.setattr("backend.app.discussion_service.asyncio.sleep", fast_sleep)
+    with TestClient(app) as client:
+        did = client.post("/api/v1/discussions", json={"topic": "默认预算质量验证"}).json()["id"]
+        client.post(f"/api/v1/discussions/{did}/roster")
+        client.post(f"/api/v1/discussions/{did}/confirm")
+        with SessionLocal.begin() as db:
+            db.get(Discussion, did).status = DiscussionStatus.RUNNING
+        asyncio.run(run_discussion(app, did, 18))
+        transcript = client.get(f"/api/v1/discussions/{did}/transcript").json()
+        insights = client.get(f"/api/v1/discussions/{did}/insights").json()
+        assert len(transcript) == 18
+        assert transcript[-1]["action"] == "summary"
+        speakers = [message["speaker_id"] for message in transcript[:-1]]
+        assert speakers[:4] == [1, 3, 2, 3]
+        assert speakers.count(1) >= 3
+        assert set(speakers) == {1, 2, 3, 4, 5}
+        assert len({message["content"] for message in transcript}) == len(transcript)
+        assert {item["kind"] for item in insights} == {"consensus", "disagreement"}
+        assert all(item["evidence_message_ids"] for item in insights)
+        with SessionLocal() as db:
+            events = db.scalars(select(DiscussionEvent).where(
+                DiscussionEvent.discussion_id == did).order_by(DiscussionEvent.sequence)).all()
+        assert len([item for item in events if item.event_type == "insights.updated"]) >= 4
+        assert [item.sequence for item in events] == list(range(1, len(events) + 1))
+        created_ids = [item.payload["message_id"] for item in events if item.event_type == "message.created"]
+        assert len(created_ids) == len(set(created_ids)) == 18

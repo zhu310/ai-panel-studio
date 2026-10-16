@@ -44,6 +44,9 @@ class InsightBatch(BaseModel):
 
 
 class OpenAICompatibleLLM:
+    def __init__(self):
+        self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
     async def json(self, system: str, user: str, schema: type[BaseModel]):
         if not settings.openai_api_key:
             raise ModelError("后端未配置 OPENAI_API_KEY")
@@ -59,7 +62,10 @@ class OpenAICompatibleLLM:
                               "response_format": {"type": "json_object"}, "temperature": 0.6},
                     )
                     response.raise_for_status()
-                    raw = response.json()["choices"][0]["message"]["content"]
+                    body = response.json()
+                    for key in self.usage:
+                        self.usage[key] += int(body.get("usage", {}).get(key) or 0)
+                    raw = body["choices"][0]["message"]["content"]
                     return schema.model_validate(json.loads(raw))
                 except (json.JSONDecodeError, ValidationError, KeyError, IndexError) as exc:
                     if attempt:
@@ -74,4 +80,8 @@ class OpenAICompatibleLLM:
 
 
 def get_llm(app):
-    return getattr(app.state, "llm", None) or OpenAICompatibleLLM()
+    adapter = getattr(app.state, "llm", None)
+    if adapter is None:
+        adapter = OpenAICompatibleLLM()
+        app.state.llm = adapter
+    return adapter

@@ -70,8 +70,9 @@ def transcript_context(topic: str, people: list[Participant], messages: list[Mes
     recent = "\n".join(f"#{m.sequence} {next(p.name for p in people if p.id == m.speaker_id)}：{m.content}"
                        for m in messages[-8:])
     counts = Counter(m.speaker_id for m in messages)
+    uncovered = [p.name for p in people if p.role == ParticipantRole.EXPERT and counts[p.id] == 0]
     return (f"议题：{topic}\n嘉宾：\n{profiles}\n已公开发言：{len(messages)}/{budget}\n"
-            f"发言次数：{dict(counts)}\n最近发言：\n{recent or '尚无'}")
+            f"发言次数：{dict(counts)}\n尚未参与的专家：{uncovered or '无'}\n最近发言：\n{recent or '尚无'}")
 
 
 def validate_turn(turn: Turn, people: list[Participant], messages: list[Message], budget: int):
@@ -85,14 +86,26 @@ def validate_turn(turn: Turn, people: list[Participant], messages: list[Message]
         raise ModelError("主持动作不能由专家执行")
     if turn.action in {"answer", "add", "rebut", "question", "interrupt"} and turn.speaker_id == host.id:
         raise ModelError("专家动作不能由主持人执行")
+    if turn.hand_raised and turn.speaker_id == host.id:
+        raise ModelError("主持人不能申请发言")
+    if turn.action == "interrupt" and not turn.hand_raised:
+        raise ModelError("插话必须同时标记申请发言")
     if messages and turn.speaker_id == messages[-1].speaker_id:
         raise ModelError("同一人不能连续独白")
     if len(re.findall(r"[。！？!?]", turn.text)) > 2 or len(turn.text) > 160:
         raise ModelError("公开发言超过一至两句或 160 字")
     if any(turn.text.strip() == m.content.strip() for m in messages):
         raise ModelError("公开发言重复")
-    if len(messages) + 1 < 4 and turn.finish:
-        raise ModelError("讨论过早结束")
+    experts = {p.id for p in people if p.role == ParticipantRole.EXPERT}
+    spoken_after = {m.speaker_id for m in messages} | {turn.speaker_id}
+    uncovered_after = experts - spoken_after
+    turn_limit = min(budget - 1, 23)
+    remaining_after = turn_limit - (len(messages) + 1)
+    if len(uncovered_after) > remaining_after:
+        raise ModelError("剩余发言位不足，必须优先选择尚未参与的专家")
+    minimum_turns = max(4, len(experts) + 2)
+    if turn.finish and (len(messages) + 1 < minimum_turns or uncovered_after):
+        raise ModelError("讨论过早结束；所有专家至少发言一次且完成必要交锋后才能结束")
 
 
 def compact_public_text(value: str) -> str:
@@ -113,7 +126,9 @@ def turn_prompt(topic: str, people: list[Participant], messages: list[Message], 
               "action 只能是 open/invite/answer/add/rebut/question/interrupt/moderate。首条主持人 open。"
               "后续从专家主动回应、反驳、追问和主持串联中按上下文动态选择；不可固定轮询。"
               "引用或回应此前具体观点；每次 text 一至两句，最好少于 90 字，硬上限 160 字。focus 是公开关注点，不是思维链。"
-              "如果专家申请发言，设置 hand_raised=true。finish 仅在观点充分且至少四条发言后为 true。")
+              "主持人应在开场后按讨论进展适时用 invite 或 moderate 追问和串联，而不是固定轮询。"
+              "专家申请发言时设置 hand_raised=true；interrupt 必须同时申请发言。"
+              "finish 仅在所有专家至少发言一次、已有回应或交锋且观点充分后为 true。")
     return system, transcript_context(topic, people, messages, budget)
 
 
@@ -213,10 +228,20 @@ async def run_discussion(app, discussion_id: int, budget: int):
                     if discussion.status != DiscussionStatus.RUNNING:
                         return
                     if turn.hand_raised:
-                        event(db, discussion_id, "participant.hand_raised", {"participant_id": turn.speaker_id})
+                        event(db, discussion_id, "participant.hand_raised", {
+                            "participant_id": turn.speaker_id, "focus": turn.focus, "action": turn.action})
+            # Hand raising is a distinct observable state, not overwritten in the same transaction.
+            if turn.hand_raised:
+                await asyncio.sleep(0.6)
+            async with app.state.manager.lock(discussion_id):
+                with SessionLocal.begin() as db:
+                    discussion = db.get(Discussion, discussion_id)
+                    if discussion.status != DiscussionStatus.RUNNING:
+                        return
                     event(db, discussion_id, "participant.status", {"participant_id": turn.speaker_id,
-                                                                      "status": "preparing", "focus": turn.focus})
-            # Give subscribers time to observe the real, persisted preparation event.
+                                                                      "status": "preparing", "focus": turn.focus,
+                                                                      "action": turn.action})
+            # Give subscribers time to observe the persisted preparation event.
             await asyncio.sleep(0.45)
             async with app.state.manager.lock(discussion_id):
                 with SessionLocal.begin() as db:

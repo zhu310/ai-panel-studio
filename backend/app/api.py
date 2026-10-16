@@ -127,6 +127,8 @@ async def start(discussion_id: int, request: Request, body: StartBody | None = N
             item = get_discussion(db, discussion_id)
             if item.status != DiscussionStatus.CONFIRMED:
                 conflict("须先确认阵容，且讨论只能启动一次")
+            if budget < item.expert_count + 2:
+                raise HTTPException(422, f"{item.expert_count} 名专家至少需要 {item.expert_count + 2} 条公开发言预算（含总结）")
             item.status = DiscussionStatus.RUNNING
             event(db, discussion_id, "discussion.status", {"status": "running"})
         request.app.state.manager.start(request.app, discussion_id, budget)
