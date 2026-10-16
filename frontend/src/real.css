@@ -1,0 +1,7 @@
+.error { color:#ffb4b4; background:#482529; padding:10px 16px; margin:8px 16px; border-radius:8px; }
+.connection { color:#b8d5e6; margin:4px 16px; }
+.insights p small { display:block; color:#8cb3c9; margin-top:5px; }
+.studio>header button,.hall>header button { border:1px solid #315273; border-radius:8px; background:#11283e; color:#d8efff; padding:8px 12px; }
+.roster .primary:disabled,.controls button:disabled,.hero button:disabled { opacity:.6; cursor:wait; }
+.transcript { scroll-behavior:smooth; }
+.studio .empty { padding:12px; }
