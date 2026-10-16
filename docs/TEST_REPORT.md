@@ -19,6 +19,10 @@
 
 将该 ZIP 解压到全新的 `delivery/verify-stage45-clean` 后实际执行：`python -m pytest -q` 为 **24 passed、2 warnings**；`npm ci` 从锁文件安装 **259 packages**；`npm test -- --run` 为 **4 passed**；`npm run build` 成功、34 modules transformed。该目录此前不存在且没有复制原工作区的依赖目录，证明源码包可按 README 的依赖步骤复现测试与构建。真实模型调用需使用者自行创建 `.env`，未在干净复现中消费额度；Playwright 已在原工作区完成 5/5 全量回归，没有在解压目录重复下载 Chromium。
 
+## 最终真实模型补验
+
+为消除上述部分成功结论，使用 `--timeout 720` 进行最终验收。首次执行在 1 条开场后因模型连续选择同一主持人而 `failed`；后端防连续独白校验正确，最小修复为在 Prompt 中明确上一发言者 ID、禁止连续选择及开场后必须专家回应。获授权复测结果为：`deepseek-flash`、1 主持+4 专家、18 条公开消息、2 共识+2 分歧、主持总结、`completed`、SSE 回放通过，讨论耗时 366.7 秒。27 次模型请求报告 66438 tokens，模型调用合计 310.0 秒；洞见提取的无效格式重试是主要等待瓶颈。补充防回归用例后最终 pytest 为 **25 passed、2 warnings**。完整公开 Transcript、调度顺序、发言分布、逐项质量评价见 [最终真实模型验收](REAL_MODEL_ACCEPTANCE.md)。
+
 ## 自动化单元与接口测试
 
 | 命令（执行目录） | 实际结果 | 说明 |

@@ -64,6 +64,8 @@ npm run test:e2e
 
 Playwright 自动启动 Vite 和注入 Fake LLM 的测试后端，使用独立临时数据库并在退出时清理；不会污染开发数据库，也不会消费真实模型额度。浏览器截图保存在 `docs/evidence/`。可选的真实模型验收：从根目录运行 `python -m backend.app.real_smoke --experts 4 --budget 18 --timeout 600`；它会实际调用模型、消耗额度，但使用独立临时库，不输出密钥，并报告发言顺序、洞见证据及可获得的 token 用量。实际执行证据与本次长讨论的超时边界见 [测试报告](docs/TEST_REPORT.md)。
 
+最终一次 `deepseek-flash` 四专家、18 条真实验收已完成；公开 Transcript、调用耗时和质量评价见 [真实模型验收报告](docs/REAL_MODEL_ACCEPTANCE.md)。
+
 ## 限制
 
 这是单机、单 Uvicorn Worker MVP；讨论任务锁在当前进程内，**不要使用多个 worker**。进程重启时遗留 `running` 会标为 `failed`，历史数据保留，不自动续跑。SQLite `create_all` 不是迁移工具。模型可能拒绝或返回不合格式内容，后端最多纠正一次；模型服务质量和上下文语义不能由 Fake LLM 测试完全保证。没有账号权限、生产级队列或多 Worker 调度。GitHub 推送和邮件提交由项目所有者确认后执行。
