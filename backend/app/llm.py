@@ -38,6 +38,8 @@ class InsightCandidate(BaseModel):
     kind: str = Field(pattern=r"^(consensus|disagreement)$")
     content: str = Field(min_length=5, max_length=220)
     evidence_sequences: list[int] = Field(min_length=1, max_length=4)
+    existing_insight_id: int | None = Field(default=None, ge=1)
+    concept_key: str | None = Field(default=None, min_length=2, max_length=80)
 
 
 class InsightBatch(BaseModel):

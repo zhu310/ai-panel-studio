@@ -53,9 +53,19 @@ class BrowserFakeLLM:
                         hand_raised=action == "interrupt" or uttered == 2,
                         finish=False if full_budget else uttered >= min(budget - 2, earliest_finish))
         if schema is InsightBatch:
+            sequences = [int(value) for value in re.findall(r"^#(\d+) ", user, re.MULTILINE)]
+            latest = sequences[-1]
+            consensus_id = re.search(r"ID=(\d+) kind=consensus", user)
+            disagreement_id = re.search(r"ID=(\d+) kind=disagreement", user)
             return InsightBatch(items=[
-                InsightCandidate(kind="consensus", content="各方支持先试点并评估学习效果", evidence_sequences=[2, 4]),
-                InsightCandidate(kind="disagreement", content="试点前是否必须完成数据边界约定仍有分歧", evidence_sequences=[2, 3]),
+                InsightCandidate(kind="consensus", content=f"截至第{latest}条，各方支持先试点并评估学习效果",
+                                 evidence_sequences=sequences[-2:],
+                                 existing_insight_id=int(consensus_id.group(1)) if consensus_id else None,
+                                 concept_key="试点评估"),
+                InsightCandidate(kind="disagreement", content=f"截至第{latest}条，数据边界约定的先后仍有分歧",
+                                 evidence_sequences=sequences[-3:-1],
+                                 existing_insight_id=int(disagreement_id.group(1)) if disagreement_id else None,
+                                 concept_key="数据边界先后"),
             ])
         from .discussion_service import Summary
         if schema is Summary:

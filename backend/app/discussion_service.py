@@ -135,51 +135,78 @@ def turn_prompt(topic: str, people: list[Participant], messages: list[Message], 
     return system, transcript_context(topic, people, messages, budget)
 
 
-def insight_prompt(topic: str, people: list[Participant], messages: list[Message]):
+def insight_prompt(topic: str, people: list[Participant], messages: list[Message],
+                   existing_insights: list[DiscussionInsight] | None = None):
     names = {p.id: p.name for p in people}
     lines = "\n".join(f"#{m.sequence} {names[m.speaker_id]}：{m.content}" for m in messages)
+    known = "\n".join(f"ID={item.id} kind={item.kind.value if isinstance(item.kind, InsightKind) else item.kind} content={item.content}"
+                       for item in (existing_insights or [])) or "无"
     return ("仅根据给定公开发言提取已有共识或分歧，返回 JSON 对象 items。每项含 kind"
-            "（consensus/disagreement）、content、evidence_sequences（真实发言序号数组）。"
-            "证据不足时返回空数组；合并同义结论，每类最多两项。", f"议题：{topic}\n{lines}")
+            "（consensus/disagreement）、content、evidence_sequences（真实发言序号数组）、"
+            "existing_insight_id（整数或 null）、concept_key（简短稳定的语义维度，不是主题关键词列表）。"
+            "先比较已有洞见：同类型且语义相同或只是改写时必须返回其 ID；真正不同的观点返回 null。"
+            "同批同义候选只保留一项并使用相同 concept_key；相同证据不代表语义相同。"
+            "证据不足时返回空数组；每类最多两项。",
+            f"议题：{topic}\n已有有效洞见：\n{known}\n公开发言：\n{lines}")
+
+
+def _concept_key(value: str | None) -> str:
+    return re.sub(r"[\W_]+", "", (value or "").casefold())
 
 
 def save_insights(db, discussion_id: int, candidates: InsightBatch, messages: list[Message]):
     by_seq = {m.sequence: m for m in messages}
-    changed = []
+    existing = db.scalars(select(DiscussionInsight).options(selectinload(DiscussionInsight.evidence)).where(
+        DiscussionInsight.discussion_id == discussion_id,
+        DiscussionInsight.is_active.is_(True)).order_by(DiscussionInsight.id)).all()
+    by_id = {item.id: item for item in existing}
+    evidence_ids = {item.id: {link.message_id for link in item.evidence} for item in existing}
+    batch_targets: dict[tuple[InsightKind, str], DiscussionInsight] = {}
+    changed: list[int] = []
     for candidate in candidates.items:
         evidence = [by_seq.get(n) for n in candidate.evidence_sequences]
         if not evidence or any(m is None or m.discussion_id != discussion_id for m in evidence):
             continue
         kind = InsightKind(candidate.kind)
-        same = db.scalar(select(DiscussionInsight).where(
-            DiscussionInsight.discussion_id == discussion_id,
-            DiscussionInsight.kind == kind,
-            DiscussionInsight.content == candidate.content))
-        if same:
-            insight = same
-            insight.version += 1
-        else:
-            existing = db.scalars(select(DiscussionInsight).where(
-                DiscussionInsight.discussion_id == discussion_id,
-                DiscussionInsight.kind == kind,
-                DiscussionInsight.is_active.is_(True)).order_by(DiscussionInsight.id)).all()
-            if len(existing) >= 2:
-                insight = existing[0]
-                insight.content = candidate.content
-                insight.version += 1
-                for old_evidence in list(insight.evidence):
-                    db.delete(old_evidence)
-                db.flush()
-                db.expire(insight, ["evidence"])
-            else:
-                insight = DiscussionInsight(discussion_id=discussion_id, kind=kind, content=candidate.content)
-                db.add(insight)
-                db.flush()
-        known = {e.message_id for e in insight.evidence}
+        insight = None
+        if candidate.existing_insight_id is not None:
+            requested = by_id.get(candidate.existing_insight_id)
+            if requested is None or requested.kind != kind:
+                continue
+            insight = requested
+        if insight is None:
+            insight = next((item for item in existing
+                            if item.kind == kind and item.content.strip() == candidate.content.strip()), None)
+        key = _concept_key(candidate.concept_key)
+        if insight is None and key:
+            insight = batch_targets.get((kind, key))
+        created = insight is None
+        if created:
+            if sum(item.kind == kind for item in existing) >= 2:
+                continue
+            insight = DiscussionInsight(discussion_id=discussion_id, kind=kind, content=candidate.content)
+            db.add(insight)
+            db.flush()
+            existing.append(insight)
+            by_id[insight.id] = insight
+            evidence_ids[insight.id] = set()
+        material_change = created
+        if not created and insight.content.strip() != candidate.content.strip():
+            insight.content = candidate.content
+            material_change = True
+        if key:
+            batch_targets[(kind, key)] = insight
+        known = evidence_ids[insight.id]
         for message in evidence:
             if message.id not in known:
                 db.add(InsightEvidence(insight_id=insight.id, message_id=message.id))
-        changed.append(insight.id)
+                known.add(message.id)
+                material_change = True
+        if material_change:
+            if not created:
+                insight.version += 1
+            if insight.id not in changed:
+                changed.append(insight.id)
     if changed:
         event(db, discussion_id, "insights.updated", {"insight_ids": changed})
 
@@ -275,7 +302,10 @@ async def run_discussion(app, discussion_id: int, budget: int):
                     with SessionLocal() as db:
                         all_messages = db.scalars(select(Message).where(Message.discussion_id == discussion_id)
                                                   .order_by(Message.sequence)).all()
-                    s, u = insight_prompt(topic, people, all_messages)
+                        existing_insights = db.scalars(select(DiscussionInsight).where(
+                            DiscussionInsight.discussion_id == discussion_id,
+                            DiscussionInsight.is_active.is_(True)).order_by(DiscussionInsight.id)).all()
+                    s, u = insight_prompt(topic, people, all_messages, existing_insights)
                     batch: InsightBatch = await get_llm(app).json(s, u, InsightBatch)
                     async with app.state.manager.lock(discussion_id):
                         with SessionLocal.begin() as db:

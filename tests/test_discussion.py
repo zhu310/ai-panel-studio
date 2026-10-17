@@ -4,13 +4,14 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from backend.app.api import app
 from backend.app.database import Base, engine, SessionLocal
 from backend.app.models import (Discussion, DiscussionStatus, Participant, ParticipantRole,
-                                Message, DiscussionEvent, DiscussionInsight)
+                                Message, DiscussionEvent, DiscussionInsight, InsightKind)
 from backend.app.llm import Guest, Roster, Turn, InsightBatch, InsightCandidate, ModelError
 from backend.app.discussion_service import (run_discussion, Summary, compact_public_text,
-                                            validate_turn, turn_prompt)
+                                            validate_turn, turn_prompt, insight_prompt)
 from backend.app.discussion_service import save_insights
 
 class FakeLLM:
@@ -198,7 +199,7 @@ def test_insight_rejects_cross_discussion_evidence():
     with SessionLocal() as db:
         assert db.scalars(select(DiscussionInsight).where(DiscussionInsight.discussion_id == aid)).all() == []
 
-def test_insight_updates_are_bounded_and_keep_evidence():
+def test_insight_limit_does_not_overwrite_unrelated_records():
     from backend.app.models import Participant, ParticipantRole
     with SessionLocal.begin() as db:
         d = Discussion(topic="更新测试", expert_count=2)
@@ -215,8 +216,189 @@ def test_insight_updates_are_bounded_and_keep_evidence():
     with SessionLocal() as db:
         rows = db.scalars(select(DiscussionInsight).where(DiscussionInsight.discussion_id == did)).all()
         assert len(rows) == 2
-        assert any(row.version == 2 and row.content == "更新后的新共识" for row in rows)
+        assert {row.content for row in rows} == {"第一项已有共识", "第二项已有共识"}
         assert all(len(row.evidence) == 2 for row in rows)
+
+def test_exact_duplicate_insight_is_idempotent():
+    from backend.app.models import Participant, ParticipantRole
+    with SessionLocal.begin() as db:
+        d = Discussion(topic="重复测试", expert_count=2); db.add(d); db.flush()
+        p = Participant(discussion_id=d.id, role=ParticipantRole.EXPERT, name="专家", title="研究员",
+                        background="研究", stance="审慎", color="#123456"); db.add(p); db.flush()
+        messages = [Message(discussion_id=d.id, speaker_id=p.id, sequence=1, content="公开证据")]
+        db.add_all(messages); db.flush()
+        candidate = InsightCandidate(kind="consensus", content="应先小范围试点再评估", evidence_sequences=[1])
+        save_insights(db, d.id, InsightBatch(items=[candidate]), messages)
+        save_insights(db, d.id, InsightBatch(items=[candidate]), messages)
+        did = d.id
+    with SessionLocal() as db:
+        rows = db.scalars(select(DiscussionInsight).where(DiscussionInsight.discussion_id == did)).all()
+        events = db.scalars(select(DiscussionEvent).where(
+            DiscussionEvent.discussion_id == did, DiscussionEvent.event_type == "insights.updated")).all()
+        assert len(rows) == 1 and rows[0].version == 1
+        assert len(events) == 1
+
+def test_semantic_paraphrase_does_not_create_duplicate_across_batches():
+    from backend.app.models import Participant, ParticipantRole
+    with SessionLocal.begin() as db:
+        d = Discussion(topic="岗位变化", expert_count=2)
+        db.add(d); db.flush()
+        p = Participant(discussion_id=d.id, role=ParticipantRole.EXPERT, name="专家", title="研究员",
+                        background="劳动力市场", stance="关注岗位入口", color="#123456")
+        db.add(p); db.flush()
+        messages = [Message(discussion_id=d.id, speaker_id=p.id, sequence=n, content=f"发言{n}") for n in (1, 2)]
+        db.add_all(messages); db.flush()
+        save_insights(db, d.id, InsightBatch(items=[InsightCandidate(
+            kind="disagreement", content="转向人工复核后能否保住初级岗位入口仍有分歧",
+            evidence_sequences=[1, 2], concept_key="初级岗位入口可持续性")]), messages)
+        original = db.scalar(select(DiscussionInsight).where(DiscussionInsight.discussion_id == d.id))
+        original_id = original.id
+        save_insights(db, d.id, InsightBatch(items=[InsightCandidate(
+            kind="disagreement", content="初级工程师改做验证工作是否仍能维持原有就业入口尚无共识",
+            evidence_sequences=[1, 2], existing_insight_id=original_id,
+            concept_key="初级岗位入口可持续性")]), messages)
+        did = d.id
+    with SessionLocal() as db:
+        rows = db.scalars(select(DiscussionInsight).where(DiscussionInsight.discussion_id == did)).all()
+        assert len(rows) == 1
+
+def test_semantic_paraphrases_in_one_batch_do_not_create_duplicates():
+    from backend.app.models import Participant, ParticipantRole
+    with SessionLocal.begin() as db:
+        d = Discussion(topic="岗位变化", expert_count=2)
+        db.add(d); db.flush()
+        p = Participant(discussion_id=d.id, role=ParticipantRole.EXPERT, name="专家", title="研究员",
+                        background="劳动力市场", stance="关注岗位入口", color="#123456")
+        db.add(p); db.flush()
+        messages = [Message(discussion_id=d.id, speaker_id=p.id, sequence=n, content=f"发言{n}") for n in (1, 2)]
+        db.add_all(messages); db.flush()
+        save_insights(db, d.id, InsightBatch(items=[
+            InsightCandidate(kind="disagreement", content="转向人工复核后能否保住初级岗位入口仍有分歧",
+                             evidence_sequences=[1, 2], concept_key="初级岗位入口可持续性"),
+            InsightCandidate(kind="disagreement", content="初级工程师改做验证工作是否仍能维持原有就业入口尚无共识",
+                             evidence_sequences=[1, 2], concept_key="初级岗位入口可持续性"),
+        ]), messages)
+        did = d.id
+    with SessionLocal() as db:
+        rows = db.scalars(select(DiscussionInsight).where(DiscussionInsight.discussion_id == did)).all()
+        assert len(rows) == 1
+
+def test_insight_update_keeps_identity_and_unions_new_evidence():
+    from backend.app.models import Participant, ParticipantRole
+    with SessionLocal.begin() as db:
+        d = Discussion(topic="证据更新", expert_count=2); db.add(d); db.flush()
+        p = Participant(discussion_id=d.id, role=ParticipantRole.EXPERT, name="专家", title="研究员",
+                        background="研究", stance="审慎", color="#123456"); db.add(p); db.flush()
+        messages = [Message(discussion_id=d.id, speaker_id=p.id, sequence=n, content=f"证据{n}") for n in (1, 2)]
+        db.add_all(messages); db.flush()
+        save_insights(db, d.id, InsightBatch(items=[InsightCandidate(
+            kind="consensus", content="先试点再决定推广", evidence_sequences=[1], concept_key="推广节奏")]), messages)
+        original = db.scalar(select(DiscussionInsight).where(DiscussionInsight.discussion_id == d.id))
+        original_id = original.id
+        save_insights(db, d.id, InsightBatch(items=[InsightCandidate(
+            kind="consensus", content="应在试点评估后再扩大使用范围", evidence_sequences=[2],
+            existing_insight_id=original_id, concept_key="推广节奏")]), messages)
+        message_ids = {message.id for message in messages}
+        did = d.id
+    with SessionLocal() as db:
+        row = db.scalar(select(DiscussionInsight).options(selectinload(DiscussionInsight.evidence)).where(
+            DiscussionInsight.discussion_id == did))
+        assert row.id == original_id and row.version == 2
+        assert {link.message_id for link in row.evidence} == message_ids
+
+def test_same_evidence_can_support_two_distinct_insights():
+    from backend.app.models import Participant, ParticipantRole
+    with SessionLocal.begin() as db:
+        d = Discussion(topic="多维影响", expert_count=2); db.add(d); db.flush()
+        p = Participant(discussion_id=d.id, role=ParticipantRole.EXPERT, name="专家", title="研究员",
+                        background="研究", stance="审慎", color="#123456"); db.add(p); db.flush()
+        messages = [Message(discussion_id=d.id, speaker_id=p.id, sequence=n, content=f"综合发言{n}") for n in (1, 2)]
+        db.add_all(messages); db.flush()
+        save_insights(db, d.id, InsightBatch(items=[
+            InsightCandidate(kind="disagreement", content="初级岗位数量是否下降仍有分歧",
+                             evidence_sequences=[1, 2], concept_key="岗位数量"),
+            InsightCandidate(kind="disagreement", content="高校培养内容应如何调整仍有分歧",
+                             evidence_sequences=[1, 2], concept_key="培养方案"),
+        ]), messages)
+        did = d.id
+    with SessionLocal() as db:
+        rows = db.scalars(select(DiscussionInsight).where(DiscussionInsight.discussion_id == did)).all()
+        assert len(rows) == 2
+        assert {row.content for row in rows} == {"初级岗位数量是否下降仍有分歧", "高校培养内容应如何调整仍有分歧"}
+
+def test_existing_insight_id_cannot_cross_discussions():
+    from backend.app.models import Participant, ParticipantRole
+    with SessionLocal.begin() as db:
+        discussions = [Discussion(topic=topic, expert_count=2) for topic in ("甲", "乙")]
+        db.add_all(discussions); db.flush()
+        participants = [Participant(discussion_id=d.id, role=ParticipantRole.EXPERT, name=f"{d.topic}专家",
+                                    title="研究员", background="研究", stance="审慎", color="#123456")
+                        for d in discussions]
+        db.add_all(participants); db.flush()
+        messages = [Message(discussion_id=d.id, speaker_id=p.id, sequence=1, content=f"{d.topic}证据")
+                    for d, p in zip(discussions, participants)]
+        db.add_all(messages); db.flush()
+        save_insights(db, discussions[1].id, InsightBatch(items=[InsightCandidate(
+            kind="consensus", content="乙讨论的已有共识", evidence_sequences=[1])]), [messages[1]])
+        foreign_insight = db.scalar(select(DiscussionInsight).where(
+            DiscussionInsight.discussion_id == discussions[1].id))
+        save_insights(db, discussions[0].id, InsightBatch(items=[InsightCandidate(
+            kind="consensus", content="试图更新另一讨论", evidence_sequences=[1],
+            existing_insight_id=foreign_insight.id, concept_key="跨讨论")]), [messages[0]])
+        first_id = discussions[0].id
+    with SessionLocal() as db:
+        assert db.scalars(select(DiscussionInsight).where(
+            DiscussionInsight.discussion_id == first_id)).all() == []
+
+def test_existing_insight_id_must_keep_its_kind():
+    from backend.app.models import Participant, ParticipantRole
+    with SessionLocal.begin() as db:
+        d = Discussion(topic="类型校验", expert_count=2); db.add(d); db.flush()
+        p = Participant(discussion_id=d.id, role=ParticipantRole.EXPERT, name="专家", title="研究员",
+                        background="研究", stance="审慎", color="#123456"); db.add(p); db.flush()
+        message = Message(discussion_id=d.id, speaker_id=p.id, sequence=1, content="有效证据")
+        db.add(message); db.flush()
+        save_insights(db, d.id, InsightBatch(items=[InsightCandidate(
+            kind="consensus", content="已有共识内容", evidence_sequences=[1])]), [message])
+        existing = db.scalar(select(DiscussionInsight).where(DiscussionInsight.discussion_id == d.id))
+        save_insights(db, d.id, InsightBatch(items=[InsightCandidate(
+            kind="disagreement", content="不能借用共识 ID 的分歧", evidence_sequences=[1],
+            existing_insight_id=existing.id, concept_key="类型冲突")]), [message])
+        did = d.id
+    with SessionLocal() as db:
+        rows = db.scalars(select(DiscussionInsight).where(DiscussionInsight.discussion_id == did)).all()
+        assert len(rows) == 1 and rows[0].kind == InsightKind.CONSENSUS
+        assert rows[0].content == "已有共识内容"
+
+def test_updated_insight_is_visible_through_api_and_sse():
+    from backend.app.models import Participant, ParticipantRole
+    with SessionLocal.begin() as db:
+        d = Discussion(topic="接口更新", expert_count=2, status=DiscussionStatus.COMPLETED)
+        db.add(d); db.flush()
+        p = Participant(discussion_id=d.id, role=ParticipantRole.EXPERT, name="专家", title="研究员",
+                        background="研究", stance="审慎", color="#123456"); db.add(p); db.flush()
+        messages = [Message(discussion_id=d.id, speaker_id=p.id, sequence=n, content=f"证据{n}") for n in (1, 2)]
+        db.add_all(messages); db.flush()
+        save_insights(db, d.id, InsightBatch(items=[InsightCandidate(
+            kind="consensus", content="先试点再推广", evidence_sequences=[1], concept_key="推广节奏")]), messages)
+        insight = db.scalar(select(DiscussionInsight).where(DiscussionInsight.discussion_id == d.id))
+        save_insights(db, d.id, InsightBatch(items=[InsightCandidate(
+            kind="consensus", content="应在试点评估后逐步推广", evidence_sequences=[2],
+            existing_insight_id=insight.id, concept_key="推广节奏")]), messages)
+        did, insight_id = d.id, insight.id
+    with TestClient(app) as client:
+        payload = client.get(f"/api/v1/discussions/{did}/insights").json()
+        wire = client.get(f"/api/v1/discussions/{did}/events").text
+    assert len(payload) == 1 and payload[0]["id"] == insight_id and payload[0]["version"] == 2
+    assert len(payload[0]["evidence_message_ids"]) == 2
+    assert wire.count("event: insights.updated") == 2
+
+def test_insight_prompt_exposes_existing_identity_without_extra_call():
+    insight = DiscussionInsight(id=9, discussion_id=1, kind="disagreement",
+                                content="岗位入口能否维持仍有分歧")
+    system, user = insight_prompt("AI 编程工具", [], [], [insight])
+    assert "existing_insight_id" in system and "concept_key" in system
+    assert "ID=9" in user and "岗位入口能否维持仍有分歧" in user
 
 def test_two_running_discussions_complete_independently():
     with TestClient(app) as client:
@@ -315,11 +497,17 @@ def test_default_budget_has_dynamic_exchange_host_reentry_and_incremental_insigh
             if schema is InsightBatch:
                 sequences = [int(x) for x in re.findall(r"^#(\d+) ", user, re.MULTILINE)]
                 latest = sequences[-1]
+                consensus_id = re.search(r"ID=(\d+) kind=consensus", user)
+                disagreement_id = re.search(r"ID=(\d+) kind=disagreement", user)
                 return InsightBatch(items=[
                     InsightCandidate(kind="consensus", content=f"截至第{latest}条，各方同意先核验实际效果",
-                                     evidence_sequences=sequences[-2:]),
+                                     evidence_sequences=sequences[-2:],
+                                     existing_insight_id=int(consensus_id.group(1)) if consensus_id else None,
+                                     concept_key="先核验实际效果"),
                     InsightCandidate(kind="disagreement", content=f"截至第{latest}条，实施边界仍有分歧",
-                                     evidence_sequences=sequences[-3:-1]),
+                                     evidence_sequences=sequences[-3:-1],
+                                     existing_insight_id=int(disagreement_id.group(1)) if disagreement_id else None,
+                                     concept_key="实施边界"),
                 ])
             return await super().json(system, user, schema)
 
