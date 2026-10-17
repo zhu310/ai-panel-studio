@@ -40,7 +40,7 @@
 | E-02 | 非结束时一次性生成 | 同上 | 默认预算 Fake | 第 6、9、12、15...轮增量更新 | 满足（代码+自动化） |
 | E-03 | 未形成时无预设结论 | DB 初始为空；UI 空态 | E2E 启动前 insights `[]` | 真实模式不加载 Mock 结论 | 满足（代码+自动化） |
 | E-04 | 洞见引用真实发言 | `save_insights:142-180` | evidence 与跨讨论拒绝测试 | 无合法证据不保存 | 满足（代码+自动化） |
-| E-05 | 合并和修订 | `save_insights:156-180` | bounded/version 测试 | 同类洞见更新版本并替换证据 | 满足（代码+自动化） |
+| E-05 | 合并和修订 | `insight_prompt`、`save_insights` | 语义归并专项测试 | 同义改写按受校验已有 ID 更新；同批按语义维度归并；证据取并集，不覆盖无关洞见 | 满足（代码+自动化） |
 | E-06 | 证据跨讨论隔离 | 同上 discussion_id 校验 | `test_insight_rejects_cross_discussion_evidence` | 外场证据被拒绝 | 满足（代码+自动化） |
 | E-07 | 清晰区分共识与分歧 | `RealApp.tsx:206-209` | E2E/截图 | 两个独立区域和空态 | 满足（真实浏览器） |
 | E-08 | 真实讨论洞见语义准确 | DeepSeek + evidence schema | 最终真实 18 条运行 | 2 共识、2 分歧均可追溯到洞见出现前的公开发言 | 满足（真实模型+人工语义审阅） |
@@ -70,7 +70,7 @@
 | H-05 | ER 图 | `docs/ARCHITECTURE.md` Mermaid ER | 文档审计 | 与 models 对齐 | 满足 |
 | H-06 | 核心流程图 | `docs/ARCHITECTURE.md` Mermaid flow | 文档审计 | roster→confirm→run→SSE | 满足 |
 | H-07 | API 文档 | `docs/API.md` | OpenAPI/文档审计 | 已实现与约束准确 | 满足 |
-| H-08 | 测试代码/报告 | `tests/`、`frontend/e2e/`、`TEST_REPORT.md` | 最终 pytest 25 passed；Vitest 4 passed；Playwright 5 passed | 历史 21/24 与最终 25 均按阶段标注 | 满足 |
+| H-08 | 测试代码/报告 | `tests/`、`frontend/e2e/`、`TEST_REPORT.md` | 最终 pytest 34 passed；Vitest 4 passed；Playwright 5 passed | 历史 21/24/25 与最终 34 均按阶段标注 | 满足 |
 | H-09 | README 配置/运行准确 | `README.md` | clean ZIP 复现 | 含初始化、双端、测试、真实验收 | 满足 |
 | H-10 | 至少五段真实核心 Prompt | `docs/prompts/00-05` | 文件审计 | 六段；01/02 已补回可核实完整原文 | 满足 |
 | H-11 | 覆盖 SDD/DDD/TDD/E2E | `01-sdd` 至 `04-e2e` | 文件审计 | 阶段映射明确 | 满足 |
@@ -107,4 +107,4 @@ Playwright 5/5 覆盖：完整创建/阵容/状态/SSE/洞见/总结/刷新；�
 
 ## 交付复现
 
-阶段 4.5 从 ZIP 解压到此前不存在的 `delivery/verify-stage45-clean`，实际完成 `python -m pytest -q`（当时 24 passed）、`npm ci`（259 packages）、`npm test -- --run`（4 passed）和 `npm run build`（成功）。最终真实验收新增一项调度 Prompt 防回归测试，当前全量为 25 passed。打包脚本同时检查禁入路径，并用本地 `.env` 中的 key/secret 值逐文件比对且不打印秘密；无命中。详见 `docs/TEST_REPORT.md`。
+阶段 4.5 从 ZIP 解压到此前不存在的 `delivery/verify-stage45-clean`，实际完成 `python -m pytest -q`（当时 24 passed）、`npm ci`（259 packages）、`npm test -- --run`（4 passed）和 `npm run build`（成功）。真实模型验收后增至 25 项，本次洞见语义归并后最终为 34 passed。打包脚本同时检查禁入路径，并用本地 `.env` 中的 key/secret 值逐文件比对且不打印秘密；无命中。详见 `docs/TEST_REPORT.md`。
